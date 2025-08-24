@@ -37,6 +37,18 @@ Example output:
 
 Category: signal_processing
 
+OPTIMIZATION OPPORTUNITIES:
+Consider these algorithmic improvements for significant performance gains:
+- Lower-order interpolation: Try order=0 (nearest) or order=1 (linear) vs default order=3 (cubic)
+  Linear interpolation (order=1) often provides best speed/quality balance with major speedups
+- Precision optimization: float32 often sufficient vs float64, especially with lower interpolation orders
+- Separable transforms: Check if the transformation can be decomposed into separate x and y operations
+- Cache-friendly memory access patterns: Process data in blocks to improve cache utilization
+- JIT compilation: Use JAX or Numba for numerical operations that are Python-bottlenecked
+- Direct coordinate mapping: Avoid intermediate coordinate calculations for simple transforms
+- Hardware optimizations: Leverage SIMD instructions through vectorized operations
+- Batch processing: Process multiple images or regions simultaneously for amortized overhead
+
 This is the initial implementation that will be evolved by OpenEvolve.
 The solve method will be improved through evolution.
 """
