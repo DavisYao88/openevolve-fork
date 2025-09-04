@@ -10,6 +10,7 @@ from openevolve.controller import OpenEvolve
 class TestMigrationWithLLM:
     """Test island migration with real LLM generation"""
 
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_island_migration_no_duplicates_real_evolution(
         self,
@@ -70,6 +71,7 @@ class TestMigrationWithLLM:
                 assert "_migrant" not in migrant.id, \
                     f"Migrant program {migrant.id} has _migrant suffix"
 
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_per_island_map_elites_isolation(
         self,
@@ -112,6 +114,7 @@ class TestMigrationWithLLM:
                 assert program_island == island_idx, \
                     f"Program {program_id} island mismatch: in map {island_idx} but metadata says {program_island}"
 
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_migration_preserves_program_quality(
         self,
@@ -162,6 +165,7 @@ class TestMigrationWithLLM:
             # Most importantly: no _migrant_ suffix
             assert "_migrant" not in migrant.id, f"Migrant {migrant.id} should not have _migrant suffix"
 
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_migration_timing_logic(
         self,
@@ -206,6 +210,7 @@ class TestMigrationWithLLM:
             # but the system should have at least considered it
             print(f"Migration should have been considered (max gen: {max_generation})")
 
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_single_island_no_migration(
         self,
