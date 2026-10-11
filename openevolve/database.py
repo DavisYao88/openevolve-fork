@@ -1794,7 +1794,7 @@ class ProgramDatabase:
                 inspirations.append(program)
 
         # Add diverse programs from within the island
-        if len(island_programs) > n and len(inspirations) < n:
+        if len(inspirations) < n:
             remaining_slots = n - len(inspirations)
 
             # Try to sample from different feature cells within the island
