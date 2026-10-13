@@ -463,6 +463,33 @@ See the [Copilot CLI quickstart example](examples/copilot_cli_quickstart/) for a
 
 </details>
 
+<details>
+<summary>🧩 Codex App Server (No API Key)</summary>
+
+Use the [Codex CLI's app-server](https://developers.openai.com/codex/app-server/) as the LLM backend — no API keys needed. Authentication uses your ChatGPT (Codex) subscription: the app-server owns the managed browser/device-code login and refreshes the tokens itself. OpenEvolve never reads the CLI's token files, and before each generation it verifies with the app-server that a ChatGPT-plan login is active (it fails with a clear message pointing at `codex login` otherwise). To bill an API key instead, keep the default OpenAI provider — both paths coexist.
+
+```bash
+# Install and authenticate
+npm install -g @openai/codex
+codex login          # browser flow, or: codex login --device-code
+```
+
+```yaml
+# config.yaml
+llm:
+  provider: "codex_app_server"
+  models:
+    - name: "gpt-5.3-codex"
+      weight: 0.8
+      reasoning_effort: "medium"
+    - name: "gpt-5.3-codex-mini"
+      weight: 0.2
+```
+
+Each call speaks newline-delimited JSON-RPC to a short-lived `codex app-server` process over stdio (unsupported on Windows). Threads run non-interactive: tool approvals are `never` and the sandbox is read-only, so responses are generated without mutating your workspace.
+
+</details>
+
 ## Examples Gallery
 
 <div align="center">
