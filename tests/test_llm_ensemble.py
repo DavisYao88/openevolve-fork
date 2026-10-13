@@ -65,7 +65,7 @@ class TestEnsembleInit(unittest.TestCase):
 
 class TestTokenUsageLogging(unittest.IsolatedAsyncioTestCase):
     async def test_openai_llm_token_usage_logging_and_propagation(self):
-        from unittest.mock import MagicMock
+        from unittest.mock import AsyncMock, MagicMock
         from openevolve.llm.openai import OpenAILLM
 
         cfg = LLMModelConfig(
@@ -84,7 +84,7 @@ class TestTokenUsageLogging(unittest.IsolatedAsyncioTestCase):
         mock_response.usage.completion_tokens = 567
         mock_response.usage.total_tokens = 1801
 
-        llm.client.chat.completions.create = MagicMock(return_value=mock_response)
+        llm.client.chat.completions.create = AsyncMock(return_value=mock_response)
 
         with self.assertLogs("openevolve.llm.openai", level="INFO") as log_ctx:
             result = await llm.generate_with_context(

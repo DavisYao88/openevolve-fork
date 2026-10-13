@@ -83,7 +83,7 @@ class OpenAILLM(LLMInterface):
             # Set up API client (normal mode)
             # OpenAI client requires max_retries to be int, not None
             max_retries = self.retries if self.retries is not None else 0
-            self.client = openai.OpenAI(
+            self.client = openai.AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=self.api_base,
                 timeout=self.timeout,
@@ -217,11 +217,10 @@ class OpenAILLM(LLMInterface):
         if self.client is None:
             raise RuntimeError("OpenAI client is not initialized (manual_mode enabled?)")
 
-        # Use asyncio to run the blocking API call in a thread pool
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None, lambda: self.client.chat.completions.create(**params, stream=False)
-        )
+        # Await the async client directly instead of running a blocking
+        # sync client in the default thread-pool executor, which can
+        # deadlock when the executor is saturated (see issue #278)
+        response = await self.client.chat.completions.create(**params, stream=False)
         if isinstance(response, str):
             # Some endpoints stream Server-Sent Events even when asked not to
             raise ValueError(
