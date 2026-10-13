@@ -4,7 +4,7 @@ Tests that chat completions are requested without streaming (#436)
 
 import asyncio
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from openevolve.llm.openai import OpenAILLM
 
@@ -20,10 +20,10 @@ def _make_llm():
     model_cfg.retries = 0
     model_cfg.retry_delay = 0
     model_cfg.api_base = "https://example.com/v1"
-    model_cfg.api_key = None  # openai.OpenAI is patched
+    model_cfg.api_key = None  # openai.AsyncOpenAI is patched
     model_cfg.random_seed = None
     model_cfg.reasoning_effort = None
-    with patch("openai.OpenAI"):
+    with patch("openai.AsyncOpenAI"):
         return OpenAILLM(model_cfg)
 
 
@@ -33,7 +33,7 @@ class TestNonStreamingRequests(unittest.TestCase):
         response = Mock()
         response.choices = [Mock()]
         response.choices[0].message.content = "ok"
-        llm.client.chat.completions.create.return_value = response
+        llm.client.chat.completions.create = AsyncMock(return_value=response)
 
         params = {"model": "test-model", "messages": [{"role": "user", "content": "hi"}]}
         self.assertEqual(asyncio.run(llm._call_api(params)), "ok")
@@ -43,7 +43,9 @@ class TestNonStreamingRequests(unittest.TestCase):
 
     def test_raw_sse_string_gives_clear_error(self):
         llm = _make_llm()
-        llm.client.chat.completions.create.return_value = 'data: {"object":"chat.completion.chunk"}'
+        llm.client.chat.completions.create = AsyncMock(
+            return_value='data: {"object":"chat.completion.chunk"}'
+        )
 
         with self.assertRaisesRegex(ValueError, "streaming responses are not supported"):
             asyncio.run(llm._call_api({"model": "test-model", "messages": []}))

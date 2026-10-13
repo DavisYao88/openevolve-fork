@@ -129,12 +129,12 @@ class TestReasoningEffortConfig(unittest.TestCase):
         model_cfg.retries = 3
         model_cfg.retry_delay = 5
         model_cfg.api_base = "https://api.openai.com/v1"
-        model_cfg.api_key = None  # openai.OpenAI is patched
+        model_cfg.api_key = None  # openai.AsyncOpenAI is patched
         model_cfg.random_seed = None
         model_cfg.reasoning_effort = "high"
         
         # Mock OpenAI client to avoid actual API calls
-        with unittest.mock.patch('openai.OpenAI'):
+        with unittest.mock.patch('openai.AsyncOpenAI'):
             llm = OpenAILLM(model_cfg)
             
         # Verify the reasoning_effort is stored
@@ -152,18 +152,18 @@ class TestReasoningEffortConfig(unittest.TestCase):
         model_cfg.retries = 3
         model_cfg.retry_delay = 5
         model_cfg.api_base = "https://api.openai.com/v1"
-        model_cfg.api_key = None  # openai.OpenAI is patched
+        model_cfg.api_key = None  # openai.AsyncOpenAI is patched
         model_cfg.random_seed = None
         model_cfg.reasoning_effort = "medium"
         
-        with unittest.mock.patch('openai.OpenAI'):
+        with unittest.mock.patch('openai.AsyncOpenAI'):
             llm = OpenAILLM(model_cfg)
             
             # Test the _call_api method directly with mocked client
             mock_response = Mock()
             mock_response.choices = [Mock()]
             mock_response.choices[0].message.content = "Test response"
-            llm.client.chat.completions.create.return_value = mock_response
+            llm.client.chat.completions.create = unittest.mock.AsyncMock(return_value=mock_response)
             
             # Test OpenAI reasoning model (gpt-oss-120b at openai.com should use reasoning logic)
             test_params = {
