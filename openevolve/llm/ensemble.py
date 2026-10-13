@@ -19,6 +19,7 @@ _PROVIDER_REGISTRY = {
 
 try:
     from openevolve.llm.claude_code import ClaudeCodeLLM
+
     _PROVIDER_REGISTRY["claude_code"] = lambda cfg: ClaudeCodeLLM(cfg)
 except ImportError:
     pass
@@ -27,6 +28,13 @@ try:
     from openevolve.llm.copilot_cli import CopilotCLILLM
 
     _PROVIDER_REGISTRY["copilot_cli"] = lambda cfg: CopilotCLILLM(cfg)
+except ImportError:
+    pass
+
+try:
+    from openevolve.llm.codex_app_server import CodexAppServerLLM
+
+    _PROVIDER_REGISTRY["codex_app_server"] = lambda cfg: CodexAppServerLLM(cfg)
 except ImportError:
     pass
 
