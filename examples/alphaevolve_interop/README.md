@@ -138,9 +138,120 @@ equivalent OE controls; OE's worker count stays at its default of one unless
 you configure it separately. Model-specific extra fields also warn and are not
 forwarded. Warning messages include field paths, not their values.
 
-This is a subset of inbound configuration support (A3 in #468), not `.env`
-translation, an experiment/controller shim, or a cloud-compatible export.
-Use the returned `Config` directly with the Python API.
+The dictionary helper provides a subset of inbound configuration support (A3
+in #468). It does not read `.env` files, emulate the experiment/controller SDK,
+or export cloud-compatible bundles. Use the returned `Config` directly with
+the Python API; explicit `.env` import is described below.
+
+## Import an explicit example .env file
+
+Install the optional parser (the base OpenEvolve install is unchanged):
+
+```bash
+python -m pip install "openevolve[alphaevolve-env]"
+# From a source checkout: python -m pip install -e ".[alphaevolve-env]"
+```
+
+```python
+from pathlib import Path
+from openevolve.compat.alphaevolve_env import config_from_alphaevolve_env
+
+config = config_from_alphaevolve_env(
+    "../alphaevolve-reference/examples/tsp/example.env",
+    problem_description=Path(
+        "../alphaevolve-reference/examples/tsp/instructions.md"
+    ).read_text(encoding="utf-8"),
+    api_base="http://localhost:8000/v1",
+    api_key="local-placeholder",
+)
+# Pass config to run_evolution with the original seed and adapted evaluator.
+# Importing alone does not construct clients or call the endpoint.
+```
+
+Only the named file is read. The helper does not find a default `.env`, read
+other environment variables to fill missing settings, interpolate variable
+references, change `os.environ`, or execute shell commands or the original
+`run_evolution.py`. The problem text and OE endpoint/key remain explicit caller
+arguments. A missing `api_key` still allows OE's usual provider behavior when
+a model client is later constructed, as described above.
+
+| .env setting | Mapping / behavior |
+| --- | --- |
+| `MODEL`, optional `MODEL_WEIGHT` | Single model; missing weight becomes 1 |
+| `MODEL_1..N`, optional `MODEL_i_WEIGHT` | Weighted model list in numeric index order; gaps allowed |
+| `MAX_PROGRAMS_GENERATED` | Required positive integer mapped to `max_iterations` |
+| `MAX_PROGRAMS_EVALUATED` | If present, must equal the generation budget; always warns that it is not a hard evaluation cap |
+| Other non-null variables, including cloud credentials/endpoints and concurrency | Not imported; warnings contain names, not values |
+
+Either model form may be used, but not both. Empty names, orphan weights,
+non-positive/non-finite weights, duplicate assignments, malformed syntax and
+variable/command references in model names raise errors. Quoting, comments,
+`export` prefixes and multiline quoted values are parsed with `python-dotenv`;
+expansion is intentionally disabled. No model names are guessed or remapped.
+Some upstream examples, including signal processing, do not declare models in
+their `example.env`: add an explicit model or use the dictionary helper instead.
+
+An evaluation-only budget, or different generation and evaluation budgets,
+is rejected rather than translated into an allegedly equivalent limit. Even
+equal budgets are not equivalent: OE counts generation attempts, additionally
+evaluates the seed, and may retry. This helper does not impose a strict
+evaluation, request, token, time or cost limit. The existing dictionary helper
+performs the final configuration validation; existing config loading is
+unchanged. The example runner can use either helper as described below.
+
+## Run with imported configuration from the command line
+
+The runner accepts one of `--config` (OE YAML), `--alphaevolve-config`
+(experiment JSON) or `--alphaevolve-env` (an explicitly named `.env`). The two
+AlphaEvolve options **only validate the configuration and evaluate the seed by
+default**. Add `--evolve` to generate candidates using the selected endpoint.
+The legacy `--config` option still starts evolution, with its existing default
+of one iteration.
+
+For `.env`, install the optional parser above and prepare a copy such as
+`./local.env`. Set `MODEL` or the numbered model names to models actually served
+by your OE endpoint; importing a Gemini name does not make it available locally.
+Provide a problem-text file explicitly rather than running the upstream
+entrypoint to extract it:
+
+```bash
+# Import/validate and evaluate the original TSP seed; no model requests.
+python examples/alphaevolve_interop/run.py ../alphaevolve-reference/examples/tsp \
+  --alphaevolve-env ./local.env \
+  --instructions ../alphaevolve-reference/examples/tsp/instructions.md \
+  --api-base http://localhost:8000/v1
+
+# Explicit model-driven evolution; may incur charges at the selected endpoint.
+python examples/alphaevolve_interop/run.py ../alphaevolve-reference/examples/tsp \
+  --alphaevolve-env ./local.env \
+  --instructions ../alphaevolve-reference/examples/tsp/instructions.md \
+  --api-base http://localhost:8000/v1 \
+  --evolve --iterations 1 --output-dir ./interop-output
+```
+
+Alternatively, save an experiment dictionary (including `program_language`,
+`problem_description`, `run_settings` and `generation_settings`) as JSON:
+
+```bash
+python examples/alphaevolve_interop/run.py ../alphaevolve-reference/examples/circle_packing \
+  --alphaevolve-config ./experiment.json --api-base http://localhost:8000/v1 \
+  --evolve --iterations 1 --output-dir ./interop-output
+```
+
+Both imports require an explicit `--api-base`. To select a key without putting
+its value in command arguments, add `--api-key-env OE_API_KEY` after setting
+that environment variable yourself. An explicitly selected missing/empty key
+variable is an error. If this option is omitted, the existing OE provider's
+key behavior (including `OPENAI_API_KEY` fallback) applies when a client is
+constructed. Nothing is copied from Google credential fields in the source.
+
+With `--evolve`, omitting `--iterations` uses the imported generation budget.
+An explicit positive `--iterations` may only reduce that budget. As above,
+generation attempts are not a strict request/evaluation/cost cap. `--iterations`
+without an evolution mode is rejected rather than ignored. `--instructions`
+is required only for `.env`; JSON already contains the problem description.
+Invalid option combinations and import errors are reported before loading
+the example evaluator. The original cloud `run_evolution.py` is not imported.
 
 ## Validation
 
@@ -150,6 +261,8 @@ callable-serialization path, without Google's SDK, keys, or network access:
 ```bash
 python -m unittest discover -s tests -p test_alphaevolve_compat.py
 python -m unittest discover -s tests -p test_alphaevolve_config.py
+python -m unittest discover -s tests -p test_alphaevolve_env.py
+python -m unittest discover -s tests -p test_alphaevolve_runner.py
 ```
 
 The walkthrough additionally permits direct validation against an upstream
