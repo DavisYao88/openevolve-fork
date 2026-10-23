@@ -182,6 +182,65 @@ def launch_page():
     )
 
 
+@app.route("/api/import-experiment", methods=["POST"])
+def import_experiment_api():
+    if not _is_local_request():
+        abort(403)
+
+    experiment_file = request.files.get("experiment")
+    program_file = request.files.get("program")
+    if experiment_file is None or program_file is None:
+        return jsonify({"error": "请选择实验 YAML 文件和初始程序文件。"}), 400
+    if not experiment_file.filename or not program_file.filename:
+        return jsonify({"error": "实验 YAML 文件和初始程序文件都不能为空。"}), 400
+    if Path(experiment_file.filename).suffix.lower() not in {".yaml", ".yml"}:
+        return jsonify({"error": "实验配置文件必须是 .yaml 或 .yml 格式。"}), 400
+    if Path(program_file.filename).suffix.lower() != ".py":
+        return jsonify({"error": "初始程序文件必须是 .py 格式。"}), 400
+
+    try:
+        import yaml
+
+        experiment_data = yaml.safe_load(experiment_file.stream)
+    except yaml.YAMLError as error:
+        return jsonify({"error": f"实验文件不是有效的 YAML：{error}"}), 400
+    if not isinstance(experiment_data, dict):
+        return jsonify({"error": "实验 YAML 顶层必须是对象。"}), 400
+
+    experiment = experiment_data.get("experiment")
+    if not isinstance(experiment, dict):
+        return jsonify({"error": "未找到 experiment 对象。"}), 400
+
+    task_description = experiment.get("task_description")
+    if not isinstance(task_description, str) or not task_description.strip():
+        return jsonify({"error": "experiment.task_description 必须是非空文本。"}), 400
+
+    iterations = experiment.get("max_iterations")
+    if not isinstance(iterations, int) or isinstance(iterations, bool) or iterations < 1:
+        return jsonify({"error": "experiment.max_iterations 必须是正整数。"}), 400
+
+    try:
+        initial_program = program_file.stream.read().decode("utf-8")
+    except UnicodeDecodeError:
+        return jsonify({"error": "初始程序必须是 UTF-8 编码的文本文件。"}), 400
+    if not initial_program.strip():
+        return jsonify({"error": "初始程序文件不能为空。"}), 400
+
+    config = {
+        "max_iterations": iterations,
+        "prompt": {"system_message": task_description},
+    }
+    return jsonify(
+        {
+            "initial_program": initial_program,
+            "iterations": iterations,
+            "config": yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
+            "experiment_name": str(experiment.get("name") or ""),
+            "evaluator_reference": str(experiment.get("evaluator") or ""),
+        }
+    )
+
+
 @app.route("/api/run", methods=["GET", "POST"])
 def run_api():
     global current_run

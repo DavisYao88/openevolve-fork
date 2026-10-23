@@ -4,8 +4,55 @@ const statusBadge = document.getElementById("status-badge");
 const statusMessage = document.getElementById("status-message");
 const logElement = document.getElementById("run-log");
 const visualizerLink = document.getElementById("open-visualizer");
+const importButton = document.getElementById("import-button");
+const importMessage = document.getElementById("import-message");
 
 let pollTimer = null;
+
+importButton.addEventListener("click", async () => {
+  const experimentFile = document.getElementById("experiment-file").files[0];
+  const programFile = document.getElementById("program-file").files[0];
+  if (!experimentFile || !programFile) {
+    importMessage.textContent = "请同时选择实验 YAML 文件和初始程序 .py 文件。";
+    importMessage.className = "import-message error";
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("experiment", experimentFile);
+  formData.append("program", programFile);
+  importButton.disabled = true;
+  importMessage.textContent = "正在读取并转换实验文件…";
+  importMessage.className = "import-message";
+
+  try {
+    const response = await fetch("/api/import-experiment", {
+      method: "POST",
+      headers: { "X-Requested-With": "XMLHttpRequest" },
+      body: formData,
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `导入失败（${response.status}）`);
+
+    document.getElementById("initial-program").value = result.initial_program;
+    document.getElementById("config").value = result.config;
+    document.getElementById("iterations").value = result.iterations;
+    document.getElementById("evaluator").value = "";
+
+    const name = result.experiment_name ? `“${result.experiment_name}”已导入。` : "实验配置已导入。";
+    const evaluatorNote = result.evaluator_reference
+      ? ` YAML 中的 evaluator 是“${result.evaluator_reference}”路径，不是评测器源码。`
+      : " 实验文件没有提供 evaluator。";
+    importMessage.textContent =
+      `${name} 已填入初始代码、任务描述和 ${result.iterations} 轮。${evaluatorNote} 请粘贴实际评测器代码后再启动。`;
+    importMessage.className = "import-message warning";
+  } catch (error) {
+    importMessage.textContent = error.message;
+    importMessage.className = "import-message error";
+  } finally {
+    importButton.disabled = false;
+  }
+});
 
 function showRun(run) {
   if (!run) return;

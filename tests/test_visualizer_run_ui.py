@@ -5,6 +5,7 @@ import runpy
 import sys
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -63,6 +64,56 @@ class TestVisualizerRunUI(unittest.TestCase):
                 self.assertIn("进化可视化".encode(), response.data)
                 self.assertIn("人工反馈".encode(), response.data)
                 self.assertIn("新建进化".encode(), response.data)
+
+    def test_import_experiment_and_program_maps_to_openevolve_form(self):
+        experiment_yaml = b"""experiment:
+  name: sample-run
+  task_description: |+
+    Tune only the values in PARAMS.
+    Keep the required dictionary shape.
+  programs: ./init.py
+  evaluator: ""
+  language: python
+  max_iterations: 50
+"""
+        program_code = b'PARAMS = {"learning_rate": 0.05}\n'
+        response = self.client.post(
+            "/api/import-experiment",
+            data={
+                "experiment": (BytesIO(experiment_yaml), "experiment.yaml"),
+                "program": (BytesIO(program_code), "init.py"),
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        imported = response.get_json()
+        self.assertEqual(imported["initial_program"], program_code.decode())
+        self.assertEqual(imported["iterations"], 50)
+        self.assertEqual(imported["experiment_name"], "sample-run")
+        self.assertEqual(imported["evaluator_reference"], "")
+        import yaml
+
+        config = yaml.safe_load(imported["config"])
+        self.assertEqual(config["max_iterations"], 50)
+        self.assertIn("Tune only the values in PARAMS.", config["prompt"]["system_message"])
+        self.assertNotIn("evaluator", config)
+
+    def test_import_rejects_missing_experiment_fields(self):
+        response = self.client.post(
+            "/api/import-experiment",
+            data={
+                "experiment": (
+                    BytesIO(b"experiment:\n  max_iterations: 10\n"),
+                    "experiment.yaml",
+                ),
+                "program": (BytesIO(b"PARAMS = {}\n"), "init.py"),
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("task_description", response.get_json()["error"])
 
     def test_run_starts_with_submitted_code_and_arguments(self):
         process = MagicMock()
