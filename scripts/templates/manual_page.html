@@ -1,16 +1,23 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8"/>
-  <title>OpenEvolve – Manual Mode</title>
+  <title>OpenEvolve – 人工反馈</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js"></script>
   <link rel="stylesheet" href="/static/css/manual.css"/>
 </head>
 <body>
   <header class="topbar">
-    <h1>Manual Tasks</h1>
-    <button id="refreshBtn" class="ghost">Refresh</button>
+    <div class="topbar-title">
+      <h1>人工反馈</h1>
+      <nav class="page-nav" aria-label="OpenEvolve 页面导航">
+        <a href="/">进化可视化</a>
+        <a href="/manual" aria-current="page">人工反馈</a>
+        <a href="/launch">新建进化</a>
+      </nav>
+    </div>
+    <button id="refreshBtn" class="ghost">刷新</button>
   </header>
 
   <main class="container">
@@ -20,7 +27,7 @@
   <div id="modalOverlay" class="overlay hidden"></div>
 
   <div id="taskModal" class="modal hidden">
-    <button id="closeModal" class="icon-btn close-btn" aria-label="Close">
+    <button id="closeModal" class="icon-btn close-btn" aria-label="关闭">
       <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
         <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
       </svg>
@@ -28,17 +35,17 @@
 
     <div class="modal-body">
       <div class="pane left">
-        <div class="pane-title">Prompt</div>
-        <div id="promptEditor" class="editor-host" aria-label="Prompt (read-only)"></div>
-        <button id="copyBtn" class="copy-btn">Copy</button>
+        <div class="pane-title">模型提示词</div>
+        <div id="promptEditor" class="editor-host" aria-label="模型提示词（只读）"></div>
+        <button id="copyBtn" class="copy-btn">复制</button>
       </div>
 
       <div class="pane right">
-        <div class="pane-title">Your Answer</div>
+        <div class="pane-title">你的回答</div>
         <div class="editor-wrapper">
-          <div id="answerEditor" class="editor-host" aria-label="Your answer"></div>
+          <div id="answerEditor" class="editor-host" aria-label="填写你的回答"></div>
         </div>
-        <button id="completeBtn" class="primary complete-btn">Complete</button>
+        <button id="completeBtn" class="primary complete-btn">提交回答</button>
       </div>
     </div>
   </div>

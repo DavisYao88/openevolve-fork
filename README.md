@@ -920,6 +920,8 @@ python scripts/visualizer.py
 python scripts/visualizer.py --path examples/function_minimization/openevolve_output/checkpoints/checkpoint_100/
 ```
 
+Open `http://127.0.0.1:8080/launch` to configure a run in the browser. The page lets you edit the initial program, evaluator, and YAML settings, set evaluator arguments, and start a run. It executes Python code locally; use it only on a trusted machine. Runs started there are written to `openevolve_gui_runs/` and become the visualizer's active data source.
+
 **Features:**
 
 - 🌳 **Evolution tree** with parent-child relationships

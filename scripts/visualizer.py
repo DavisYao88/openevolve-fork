@@ -1,18 +1,30 @@
 import glob
+import ipaddress
 import json
 import logging
 import math
 import os
 import re as _re
 import shutil
+import subprocess
+import sys
+import threading
+import uuid
+from datetime import datetime
+from pathlib import Path
 from numbers import Number
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, abort, jsonify, render_template, request
 from manual import create_manual_blueprint
 
 logger = logging.getLogger(__name__)
 app = Flask(__name__, template_folder="templates")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+GUI_RUNS_DIR = PROJECT_ROOT / "openevolve_gui_runs"
+current_run: Optional[dict[str, Any]] = None
+run_lock = threading.Lock()
 
 
 def find_latest_checkpoint(base_folder):
@@ -110,10 +122,187 @@ def index():
 checkpoint_dir = None  # Global variable to store the checkpoint directory
 
 
+def _is_local_request() -> bool:
+    remote_addr = request.remote_addr
+    try:
+        if remote_addr is None or not ipaddress.ip_address(remote_addr).is_loopback:
+            return False
+    except ValueError:
+        return False
+
+    host = urlsplit(request.host_url).hostname
+    try:
+        if host != "localhost" and (host is None or not ipaddress.ip_address(host).is_loopback):
+            return False
+    except ValueError:
+        return False
+
+    origin = request.headers.get("Origin")
+    return not origin or origin.rstrip("/") == request.host_url.rstrip("/")
+
+
+def _current_run_status() -> Optional[dict[str, Any]]:
+    if current_run is None:
+        return None
+
+    process = current_run["process"]
+    return_code = process.poll()
+    if return_code is not None and current_run["status"] == "running":
+        current_run["status"] = "completed" if return_code == 0 else "failed"
+        current_run["return_code"] = return_code
+
+    log_path = current_run["log_path"]
+    try:
+        with open(log_path, "rb") as log_file:
+            log_file.seek(max(0, os.path.getsize(log_path) - 16000))
+            log = log_file.read().decode("utf-8", errors="replace")
+    except OSError:
+        log = ""
+
+    return {
+        "id": current_run["id"],
+        "status": current_run["status"],
+        "output_dir": current_run["output_dir"],
+        "return_code": current_run.get("return_code"),
+        "log": log,
+    }
+
+
+@app.route("/launch")
+def launch_page():
+    if not _is_local_request():
+        abort(403)
+
+    example_dir = PROJECT_ROOT / "examples" / "function_minimization"
+    return render_template(
+        "launch.html",
+        initial_program=(example_dir / "initial_program.py").read_text(encoding="utf-8"),
+        evaluator=(example_dir / "evaluator.py").read_text(encoding="utf-8"),
+        config=(example_dir / "config.yaml").read_text(encoding="utf-8"),
+    )
+
+
+@app.route("/api/run", methods=["GET", "POST"])
+def run_api():
+    global current_run
+
+    if not _is_local_request():
+        abort(403)
+
+    if request.method == "GET":
+        return jsonify({"run": _current_run_status()})
+
+    if not request.is_json or request.headers.get("X-Requested-With") != "XMLHttpRequest":
+        return jsonify({"error": "请从本机进化配置页面提交任务。"}), 400
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "请求内容必须是 JSON 对象。"}), 400
+
+    initial_program = payload.get("initial_program")
+    evaluator = payload.get("evaluator")
+    config_text = payload.get("config", "")
+    iterations = payload.get("iterations")
+    evaluator_args_text = payload.get("evaluator_args", "")
+
+    if not isinstance(initial_program, str) or not initial_program.strip():
+        return jsonify({"error": "请填写初始程序代码。"}), 400
+    if not isinstance(evaluator, str) or not evaluator.strip():
+        return jsonify({"error": "请填写评测器代码。"}), 400
+    if not isinstance(config_text, str):
+        return jsonify({"error": "配置内容必须是 YAML 文本。"}), 400
+    if not isinstance(iterations, int) or isinstance(iterations, bool) or iterations < 1:
+        return jsonify({"error": "进化轮数必须是正整数。"}), 400
+    if not isinstance(evaluator_args_text, str):
+        return jsonify({"error": "评测器参数必须是 JSON 文本。"}), 400
+
+    try:
+        evaluator_args = json.loads(evaluator_args_text) if evaluator_args_text.strip() else {}
+    except json.JSONDecodeError as error:
+        return jsonify({"error": f"评测器参数不是有效的 JSON：{error.msg}。"}), 400
+    if not isinstance(evaluator_args, dict):
+        return jsonify({"error": "评测器参数必须是 JSON 对象。"}), 400
+
+    try:
+        import yaml
+
+        parsed_config = yaml.safe_load(config_text) if config_text.strip() else {}
+    except yaml.YAMLError as error:
+        return jsonify({"error": f"配置不是有效的 YAML：{error}"}), 400
+    if parsed_config is not None and not isinstance(parsed_config, dict):
+        return jsonify({"error": "YAML 配置的顶层内容必须是键值映射。"}), 400
+
+    if not run_lock.acquire(blocking=False):
+        return jsonify({"error": "正在启动另一个任务，请稍后再试。"}), 409
+    try:
+        if current_run is not None and current_run["process"].poll() is None:
+            return jsonify({"error": "已有进化任务正在运行。"}), 409
+
+        run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        run_dir = GUI_RUNS_DIR / run_id
+        input_dir = run_dir / "inputs"
+        initial_path = input_dir / "initial_program.py"
+        evaluator_path = input_dir / "evaluator.py"
+        config_path = input_dir / "config.yaml"
+        try:
+            input_dir.mkdir(parents=True, exist_ok=False)
+            initial_path.write_text(initial_program, encoding="utf-8")
+            evaluator_path.write_text(evaluator, encoding="utf-8")
+            if config_text.strip():
+                config_path.write_text(config_text, encoding="utf-8")
+        except OSError as error:
+            logger.exception("Could not write GUI evolution input files")
+            return jsonify({"error": f"无法保存任务输入文件：{error}"}), 500
+
+        command = [
+            sys.executable,
+            str(PROJECT_ROOT / "openevolve-run.py"),
+            str(initial_path),
+            str(evaluator_path),
+            "--iterations",
+            str(iterations),
+            "--output",
+            str(run_dir),
+        ]
+        if config_text.strip():
+            command.extend(["--config", str(config_path)])
+        if evaluator_args:
+            command.extend(["--evaluator-args", json.dumps(evaluator_args)])
+
+        log_path = run_dir / "run.log"
+        try:
+            with log_path.open("ab") as log_file:
+                process = subprocess.Popen(
+                    command,
+                    cwd=PROJECT_ROOT,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+        except OSError as error:
+            logger.exception("Could not start GUI evolution run")
+            return jsonify({"error": f"无法启动进化任务：{error}"}), 500
+
+        current_run = {
+            "id": run_id,
+            "status": "running",
+            "process": process,
+            "output_dir": str(run_dir),
+            "log_path": str(log_path),
+        }
+        return jsonify({"run": _current_run_status()}), 202
+    finally:
+        run_lock.release()
+
+
 @app.route("/api/data")
 def data():
     global checkpoint_dir
-    base_folder = os.environ.get("EVOLVE_OUTPUT", "examples/")
+    base_folder = (
+        current_run["output_dir"]
+        if current_run is not None
+        else os.environ.get("EVOLVE_OUTPUT", "examples/")
+    )
     checkpoint_dir = find_latest_checkpoint(base_folder)
     if not checkpoint_dir:
         logger.info(f"No checkpoints found in {base_folder}")
@@ -193,7 +382,13 @@ def run_static_export(args):
 
 # Manual mode blueprint mounted at /manual
 app.register_blueprint(
-    create_manual_blueprint(lambda: os.environ.get("EVOLVE_OUTPUT", "examples/"))
+    create_manual_blueprint(
+        lambda: (
+            current_run["output_dir"]
+            if current_run is not None
+            else os.environ.get("EVOLVE_OUTPUT", "examples/")
+        )
+    )
 )
 
 

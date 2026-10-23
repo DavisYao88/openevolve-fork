@@ -82,7 +82,7 @@ function loadAndRenderData(data) {
     renderGraph(data);
     renderNodeList(data.nodes);
     document.getElementById('checkpoint-label').textContent =
-        "Checkpoint: " + (data.checkpoint_dir || 'static export');
+        "检查点：" + (data.checkpoint_dir || '静态导出');
     const metricSelect = document.getElementById('metric-select');
     const prevMetric = metricSelect.value || localStorage.getItem('selectedMetric') || null;
     metricSelect.innerHTML = '';
@@ -246,7 +246,7 @@ document.getElementById('tab-branching').addEventListener('click', function() {
     if (highlightSelect && !Array.from(highlightSelect.options).some(o => o.value === 'archive')) {
         const opt = document.createElement('option');
         opt.value = 'archive';
-        opt.textContent = 'MAP-elites archive';
+        opt.textContent = 'MAP-Elites 精英档案';
         highlightSelect.appendChild(opt);
     }
 })();

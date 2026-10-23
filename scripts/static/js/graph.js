@@ -127,7 +127,7 @@ function showRecenterButton(onClick) {
     if (!btn) {
         btn = document.createElement('button');
         btn.id = 'graph-recenter-btn';
-        btn.textContent = 'Recenter';
+        btn.textContent = '重新居中';
         btn.style.position = 'absolute';
         btn.style.left = '50%';
         btn.style.top = '50%';

@@ -17,7 +17,7 @@ import { selectListNodeById } from './list.js';
                 <input type="checkbox" id="show-islands-toggle">
                 <span class="toggle-slider"></span>
             </label>
-            <span style="font-weight:500;font-size:1.08em;">Show islands</span>
+            <span style="font-weight:500;font-size:1.08em;">显示岛屿</span>
             `;
             perfDiv.insertBefore(toggleDiv, perfDiv.firstChild);
         }
@@ -181,7 +181,7 @@ function showRecenterButton(onClick) {
     if (!btn) {
         btn = document.createElement('button');
         btn.id = 'performance-recenter-btn';
-        btn.textContent = 'Recenter';
+        btn.textContent = '重新居中';
         btn.style.position = 'absolute';
         btn.style.left = '50%';
         btn.style.top = '50%';
@@ -433,7 +433,7 @@ function updatePerformanceGraph(nodes, options = {}) {
             .attr('text-anchor', 'middle')
             .attr('font-size', '1em')
             .attr('fill', '#888')
-            .text('Generation');
+            .text('代数');
         // Island label
         if (showIslands) {
             g.append('text')
@@ -445,7 +445,7 @@ function updatePerformanceGraph(nodes, options = {}) {
                 .attr('font-weight', 700)
                 .attr('fill', '#444')
                 .attr('pointer-events', 'none')
-                .text(`Island ${island}`);
+                .text(`岛屿 ${island}`);
         }
     });
     // X axis
@@ -496,7 +496,7 @@ function updatePerformanceGraph(nodes, options = {}) {
             .attr('text-anchor', 'middle')
             .attr('font-size', '0.92em')
             .attr('fill', '#888')
-            .text('NaN');
+            .text('无有效指标');
         g.append('rect')
             .attr('class', 'nan-box')
             .attr('x', nanBoxLeft)

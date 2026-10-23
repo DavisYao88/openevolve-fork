@@ -25,7 +25,7 @@ const API_BASE = `${window.location.pathname.replace(/\/$/, "")}/api`;
 function loadMonaco() {
   return new Promise((resolve, reject) => {
     if (monacoLoaded && window.monaco) return resolve();
-    if (!window.require) return reject(new Error("Monaco AMD loader not found"));
+    if (!window.require) return reject(new Error("未找到 Monaco 编辑器加载器"));
     window.require.config({
       paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs" },
     });
@@ -48,11 +48,11 @@ function taskCardHtml(t) {
   return `
     <div class="task-card" data-id="${t.id}">
       <div class="task-meta">
-        <div class="task-model">${t.model || "model: n/a"}</div>
+        <div class="task-model">${t.model || "模型：未知"}</div>
         <div class="task-id">#${short}</div>
         <div class="task-created">${t.created_at || ""}</div>
       </div>
-      <div><button class="primary provide-btn">Provide answer</button></div>
+      <div><button class="primary provide-btn">填写回答</button></div>
     </div>
   `;
 }
@@ -61,7 +61,7 @@ async function loadTasks() {
   const data = await fetchJSON(`${API_BASE}/tasks`);
   listEl.innerHTML = data.tasks.length
     ? data.tasks.map(taskCardHtml).join("")
-    : `<div class="task-card"><div>No pending tasks.</div></div>`;
+    : `<div class="task-card"><div>当前没有待处理的任务。</div></div>`;
 
   document.querySelectorAll(".provide-btn").forEach((btn) => {
     btn.addEventListener("click", async (e) => {
@@ -124,10 +124,10 @@ async function openTask(taskId) {
   copyBtn.onclick = async () => {
     try {
       await navigator.clipboard.writeText(currentPromptText);
-      copyBtn.textContent = "Copied";
-      setTimeout(() => (copyBtn.textContent = "Copy"), 900);
+      copyBtn.textContent = "已复制";
+      setTimeout(() => (copyBtn.textContent = "复制"), 900);
     } catch (e) {
-      alert("Copy failed: " + e.message);
+      alert("复制失败：" + e.message);
     }
   };
 
@@ -150,7 +150,7 @@ refreshBtn.addEventListener("click", loadTasks);
 completeBtn.addEventListener("click", async () => {
   const answer = getEditorText(answerEditor).trim();
   if (!answer) {
-    alert("Answer is empty.");
+    alert("回答不能为空。");
     return;
   }
   const form = new FormData();
@@ -161,7 +161,7 @@ completeBtn.addEventListener("click", async () => {
     body: form,
   });
   if (!r.ok) {
-    alert("Submit failed: " + (await r.text()));
+    alert("提交失败：" + (await r.text()));
     return;
   }
   closeModal();

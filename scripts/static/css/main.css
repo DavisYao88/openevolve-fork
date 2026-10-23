@@ -113,6 +113,27 @@ h1 span { font-size: 0.5em; color: #666; }
     align-items: center;
     gap: 0.5em;
 }
+.page-nav {
+    display: flex;
+    align-items: center;
+    gap: 0.35em;
+    white-space: nowrap;
+}
+.page-nav a {
+    display: inline-block;
+    padding: 0.45em 0.75em;
+    border: 1px solid var(--tab-border);
+    border-radius: 6px;
+    color: var(--text-color);
+    background: var(--tab-bg);
+    font-size: 0.9em;
+    text-decoration: none;
+}
+.page-nav a:hover,
+.page-nav a[aria-current="page"] {
+    background: var(--tab-active-bg);
+    border-color: #7194dd;
+}
 #toolbar > div[style*="margin-left:auto"] {
     margin-left: auto !important;
 }
@@ -126,6 +147,7 @@ h1 span { font-size: 0.5em; color: #666; }
         margin-top: 0.5em;
         margin-bottom: 0.5em;
     }
+    .page-nav { flex-wrap: wrap; }
 }
 #sidebar {
     position: fixed;

@@ -61,7 +61,7 @@ const sidebar = document.getElementById('sidebar');
             transition: 'background 120ms, transform 120ms, box-shadow 120ms',
         });
         resizer.appendChild(handle);
-        resizer.title = 'Drag to resize sidebar';
+        resizer.title = '拖动以调整侧边栏宽度';
 
         // Hover/focus effects to make it obvious
         function _resizerHoverOn() { resizer.style.background = 'rgba(0,0,0,0.04)'; handle.style.transform = 'scale(1.06)'; handle.style.boxShadow = '0 2px 6px rgba(0,0,0,0.2)'; }
@@ -287,18 +287,18 @@ export function showSidebarContent(d, fromHover = false) {
     }
     let starHtml = '';
     if (archiveProgramIds && archiveProgramIds.includes(d.id)) {
-        starHtml = '<span style="position:relative;top:0.05em;left:0.15em;font-size:1.6em;color:#FFD600;z-index:10;" title="MAP-elites member" aria-label="MAP-elites member">★</span>';
+        starHtml = '<span style="position:relative;top:0.05em;left:0.15em;font-size:1.6em;color:#FFD600;z-index:10;" title="MAP-Elites 精英程序" aria-label="MAP-Elites 精英程序">★</span>';
     }
-    let locatorBtn = '<button id="sidebar-locator-btn" title="Locate selected node" aria-label="Locate selected node" style="position:absolute;top:0.05em;right:2.5em;font-size:1.5em;background:none;border:none;color:#FFD600;cursor:pointer;z-index:10;line-height:1;filter:drop-shadow(0 0 2px #FFD600);">⦿</button>';
+    let locatorBtn = '<button id="sidebar-locator-btn" title="定位所选程序" aria-label="定位所选程序" style="position:absolute;top:0.05em;right:2.5em;font-size:1.5em;background:none;border:none;color:#FFD600;cursor:pointer;z-index:10;line-height:1;filter:drop-shadow(0 0 2px #FFD600);">⦿</button>';
     let closeBtn = '<button id="sidebar-close-btn" style="position:absolute;top:0.05em;right:0.15em;font-size:1.6em;background:none;border:none;color:#888;cursor:pointer;z-index:10;line-height:1;">&times;</button>';
-    let openLink = '<div style="text-align:center;margin:-1em 0 1.2em 0;"><a href="/program/' + d.id + '" target="_blank" class="open-in-new" style="font-size:0.95em;">[open in new window]</a></div>';
+    let openLink = '<div style="text-align:center;margin:-1em 0 1.2em 0;"><a href="/program/' + d.id + '" target="_blank" class="open-in-new" style="font-size:0.95em;">[在新窗口打开]</a></div>';
     let tabHtml = '';
     let tabContentHtml = '';
     let tabNames = [];
-    if (d.code && typeof d.code === 'string' && d.code.trim() !== '') tabNames.push('Code');
-    if ((d.prompts && typeof d.prompts === 'object' && Object.keys(d.prompts).length > 0) || (d.artifacts_json && typeof d.artifacts_json === 'object' && Object.keys(d.artifacts_json).length > 0)) tabNames.push('Prompts');
+    if (d.code && typeof d.code === 'string' && d.code.trim() !== '') tabNames.push('代码');
+    if ((d.prompts && typeof d.prompts === 'object' && Object.keys(d.prompts).length > 0) || (d.artifacts_json && typeof d.artifacts_json === 'object' && Object.keys(d.artifacts_json).length > 0)) tabNames.push('提示词');
     const children = allNodeData.filter(n => n.parent_id === d.id);
-    if (children.length > 0) tabNames.push('Children');
+    if (children.length > 0) tabNames.push('子程序');
 
     // Handle nodes with "-copyN" IDs
     function getBaseId(id) {
@@ -306,12 +306,12 @@ export function showSidebarContent(d, fromHover = false) {
     }
     const baseId = getBaseId(d.id);
     const clones = allNodeData.filter(n => getBaseId(n.id) === baseId && n.id !== d.id);
-    if (clones.length > 0) tabNames.push('Clones');
+    if (clones.length > 0) tabNames.push('克隆程序');
 
     // Add a Diff tab when a parent exists with code to compare against
     const parentNodeForDiff = d.parent_id && d.parent_id !== 'None' ? allNodeData.find(n => n.id == d.parent_id) : null;
     if (parentNodeForDiff && parentNodeForDiff.code && parentNodeForDiff.code.trim() !== '') {
-        tabNames.push('Diff');
+        tabNames.push('代码差异');
     }
  
         let activeTab = lastSidebarTab && tabNames.includes(lastSidebarTab) ? lastSidebarTab : tabNames[0];
@@ -355,7 +355,7 @@ export function showSidebarContent(d, fromHover = false) {
                 return '<div style="background:#f2fff2;color:#116611;padding:0.08em 0.3em;border-left:3px solid #2a8;white-space:pre-wrap;">+ ' + escapeHtml(p.line) + '</div>';
             });
             return '<div style="font-family: \'Fira Mono\', monospace; font-size:0.95em; line-height:1.35;">' +
-                '<div style="margin-bottom:0.4em;color:#666;">Showing diff between program and its parent (parent id: ' + (parentNodeForDiff ? parentNodeForDiff.id : 'N/A') + ')</div>' +
+                '<div style="margin-bottom:0.4em;color:#666;">当前程序与父程序的代码差异（父程序 ID：' + (parentNodeForDiff ? parentNodeForDiff.id : '无') + '）</div>' +
                 htmlLines.join('') + '</div>';
         }
 
@@ -365,10 +365,10 @@ export function showSidebarContent(d, fromHover = false) {
         }
 
         function renderSidebarTabContent(tabName, d, children) {
-            if (tabName === 'Code') {
+            if (tabName === '代码') {
                 return `<pre class="sidebar-code-pre">${escapeHtml(d.code)}</pre>`;
             }
-            if (tabName === 'Prompts') {
+            if (tabName === '提示词') {
                 // Prompt select logic
                 let promptOptions = [];
                 let promptMap = {};
@@ -421,7 +421,7 @@ export function showSidebarContent(d, fromHover = false) {
                  let promptHtml = `<pre class="sidebar-pre">${promptVal ?? ''}</pre>`;
                  return selectHtml + promptHtml;
              }
-             if (tabName === 'Children') {
+             if (tabName === '子程序') {
                  const metric = (document.getElementById('metric-select') && document.getElementById('metric-select').value) || 'combined_score';
                  let min = 0, max = 1;
                  const vals = children.map(child => (child.metrics && typeof child.metrics[metric] === 'number') ? child.metrics[metric] : null).filter(x => x !== null);
@@ -431,20 +431,20 @@ export function showSidebarContent(d, fromHover = false) {
                  }
                  return `<div><ul style='margin:0.5em 0 0 1em;padding:0;'>` +
                      children.map(child => {
-                         let val = (child.metrics && typeof child.metrics[metric] === 'number') ? child.metrics[metric].toFixed(4) : '(no value)';
+                         let val = (child.metrics && typeof child.metrics[metric] === 'number') ? child.metrics[metric].toFixed(4) : '（无指标值）';
                          let bar = (child.metrics && typeof child.metrics[metric] === 'number') ? renderMetricBar(child.metrics[metric], min, max) : '';
                          return `<li style='margin-bottom:0.3em;'><a href="#" class="child-link" data-child="${child.id}">${child.id}</a><br /><br /> <span style='margin-left:0.5em;'>${val}</span> ${bar}</li>`;
                      }).join('') +
                      `</ul></div>`;
              }
-             if (tabName === 'Clones') {
+             if (tabName === '克隆程序') {
                  return `<div><ul style='margin:0.5em 0 0 1em;padding:0;'>` +
                      clones.map(clone =>
                          `<li style='margin-bottom:0.3em;'><a href="#" class="clone-link" data-clone="${clone.id}">${clone.id}</a></li>`
                      ).join('') +
                      `</ul></div>`;
              }
-             if (tabName === 'Diff') {
+             if (tabName === '代码差异') {
                  const parentNode = parentNodeForDiff;
                  const parentCode = parentNode ? parentNode.code || '' : '';
                  const curCode = d.code || '';
@@ -462,7 +462,7 @@ export function showSidebarContent(d, fromHover = false) {
     if (d.parent_id && d.parent_id !== 'None') {
         const parent = allNodeData.find(n => n.id == d.parent_id);
         if (parent && parent.island !== undefined) {
-            parentIslandHtml = ` <span style="color:#888;font-size:0.92em;">(island ${parent.island})</span>`;
+            parentIslandHtml = ` <span style="color:#888;font-size:0.92em;">（岛屿 ${parent.island}）</span>`;
         }
     }
     sidebarContent.innerHTML =
@@ -471,11 +471,11 @@ export function showSidebarContent(d, fromHover = false) {
             ${locatorBtn}
             ${closeBtn}
             ${openLink}
-            <b>Program ID:</b> ${d.id}<br>
-            <b>Island:</b> ${d.island}<br>
-            <b>Generation:</b> ${d.generation}<br>
-            <b>Parent ID:</b> <a href="#" class="parent-link" data-parent="${d.parent_id || ''}">${d.parent_id || 'None'}</a>${parentIslandHtml}<br><br>
-            <b>Metrics:</b><br>${formatMetrics(d.metrics)}<br><br>
+            <b>程序 ID：</b> ${d.id}<br>
+            <b>岛屿：</b> ${d.island}<br>
+            <b>代数：</b> ${d.generation}<br>
+            <b>父程序 ID：</b> <a href="#" class="parent-link" data-parent="${d.parent_id || ''}">${d.parent_id && d.parent_id !== 'None' ? d.parent_id : '无'}</a>${parentIslandHtml}<br><br>
+            <b>指标：</b><br>${formatMetrics(d.metrics)}<br><br>
             ${tabHtml}${tabContentHtml}
         </div>`;
 
@@ -488,7 +488,7 @@ export function showSidebarContent(d, fromHover = false) {
                 // Only re-render the Prompts tab, not the whole sidebar
                 const tabContent = document.getElementById('sidebar-tab-content');
                 if (tabContent) {
-                    tabContent.innerHTML = renderSidebarTabContent('Prompts', d, children);
+                    tabContent.innerHTML = renderSidebarTabContent('提示词', d, children);
                     attachPromptSelectHandler();
                 }
             };

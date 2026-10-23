@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>新建 OpenEvolve 进化任务</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/launch.css') }}"/>
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">OpenEvolve</p>
+        <h1>配置进化任务</h1>
+        <p class="intro">编辑初始程序、评测器和参数，启动进化后可在可视化页面查看结果。</p>
+      </div>
+      <nav class="page-nav" aria-label="OpenEvolve pages">
+        <a href="/">进化可视化</a>
+        <a href="/manual">人工反馈</a>
+        <a href="/launch" aria-current="page">新建进化</a>
+      </nav>
+    </header>
+
+    <div class="notice">
+      进化任务会在本机执行 Python 代码，请只运行可信的程序和评测器。本页面仅允许本机浏览器访问。
+    </div>
+
+    <form id="run-form">
+      <section class="field">
+        <label for="initial-program">初始程序代码</label>
+        <p class="help">这是 OpenEvolve 用来开始进化的种子程序。请保留评测器要求的函数入口。</p>
+        <textarea id="initial-program" name="initial_program" spellcheck="false" required>{{ initial_program }}</textarea>
+      </section>
+
+      <section class="field">
+        <label for="evaluator">评测器代码</label>
+        <p class="help">评测候选程序并返回指标。可以通过下方参数让评测器读取本地数据集。</p>
+        <textarea id="evaluator" name="evaluator" spellcheck="false" required>{{ evaluator }}</textarea>
+      </section>
+
+      <div class="form-grid">
+        <section class="field">
+          <label for="config">配置文件（YAML）</label>
+          <textarea id="config" name="config" spellcheck="false">{{ config }}</textarea>
+        </section>
+        <div class="side-fields">
+          <section class="field">
+            <label for="iterations">进化轮数</label>
+            <input id="iterations" name="iterations" type="number" min="1" value="10" required/>
+          </section>
+          <section class="field">
+            <label for="evaluator-args">评测器参数（JSON 对象）</label>
+            <p class="help">例如：{"data_path":"data/input.csv"}</p>
+            <textarea id="evaluator-args" name="evaluator_args" class="short-editor" spellcheck="false" placeholder="{}"></textarea>
+          </section>
+          <button id="start-button" class="primary" type="submit">开始进化</button>
+        </div>
+      </div>
+    </form>
+
+    <section id="run-status" class="status-panel" aria-live="polite">
+      <div class="status-header">
+        <h2>运行状态</h2>
+        <span id="status-badge" class="badge">尚未启动</span>
+      </div>
+      <p id="status-message">配置并启动任务后，可在此查看运行进度。</p>
+      <pre id="run-log" class="run-log"></pre>
+      <a id="open-visualizer" class="back-link hidden" href="/">在可视化页面查看最新任务</a>
+    </section>
+  </main>
+  <script src="{{ url_for('static', filename='js/launch.js') }}" defer></script>
+</body>
+</html>

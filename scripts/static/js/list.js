@@ -46,17 +46,17 @@ export function renderNodeList(nodes) {
     summaryBar.innerHTML = `
       <div class="summary-block">
         <span class="summary-icon">🏆</span>
-        <span class="summary-label">Top score</span>
+        <span class="summary-label">最高分</span>
         <span class="summary-value">${topScore.toFixed(4)}</span>
         ${renderMetricBar(topScore, minScore, maxScore)}
       </div>
       <div class="summary-block">
         <span class="summary-icon">📊</span>
-        <span class="summary-label">Average</span>
+        <span class="summary-label">平均分</span>
         <span class="summary-value">${avgScore.toFixed(4)}</span>
         ${renderMetricBar(avgScore, minScore, maxScore)}
         <span style="margin-left:1.2em;font-size:0.98em;color:#888;vertical-align:middle;">
-          <span title="Total programs, generations, islands">📦</span> Total: ${nodes.length} programs, ${new Set(nodes.map(n => n.generation)).size} generations, ${new Set(nodes.map(n => n.island)).size} islands
+          <span title="程序、代数和岛屿总数">📦</span> 总计：${nodes.length} 个程序，${new Set(nodes.map(n => n.generation)).size} 代，${new Set(nodes.map(n => n.island)).size} 个岛屿
         </span>
       </div>
     `;
@@ -97,9 +97,9 @@ export function renderNodeList(nodes) {
             <div class="node-info-table">
                 ${selectedMetricRow}
                 <div class="node-info-row"><span class="node-info-label">ID:</span><span class="node-info-value">${node.id}</span></div>
-                <div class="node-info-row"><span class="node-info-label">Gen:</span><span class="node-info-value">${node.generation ?? ''}</span></div>
-                <div class="node-info-row"><span class="node-info-label">Island:</span><span class="node-info-value">${node.island ?? ''}</span></div>
-                <div class="node-info-row"><span class="node-info-label">Parent:</span><span class="node-info-value"><a href="#" class="parent-link" data-parent="${node.parent_id ?? ''}">${node.parent_id ?? 'None'}</a></span></div>
+                <div class="node-info-row"><span class="node-info-label">代数：</span><span class="node-info-value">${node.generation ?? ''}</span></div>
+                <div class="node-info-row"><span class="node-info-label">岛屿：</span><span class="node-info-value">${node.island ?? ''}</span></div>
+                <div class="node-info-row"><span class="node-info-label">父程序：</span><span class="node-info-value"><a href="#" class="parent-link" data-parent="${node.parent_id ?? ''}">${node.parent_id && node.parent_id !== 'None' ? node.parent_id : '无'}</a></span></div>
             </div>
         `;
         let metricsHtml = '<div class="metrics-block">';
@@ -131,7 +131,7 @@ export function renderNodeList(nodes) {
         metricsBlock.style.flex = '1 1 0%';
         row.appendChild(infoBlock);
 
-        let openLink = `<a href="/program/${node.id}" target="_blank" class="open-in-new" style="font-size:0.95em;">[open in new window]</a>`;
+        let openLink = `<a href="/program/${node.id}" target="_blank" class="open-in-new" style="font-size:0.95em;">[在新窗口打开]</a>`;
         const openDiv = document.createElement('div');
         openDiv.style.textAlign = 'center';
         openDiv.style.margin = '-0.5em 0 0.5em 0';

@@ -23,6 +23,15 @@ body {
   background: rgba(255,255,255,0.02); position: sticky; top: 0; backdrop-filter: blur(6px);
 }
 .topbar h1 { margin: 0; font-size: 16px; }
+.topbar-title { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.page-nav { display: flex; align-items: center; gap: 6px; }
+.page-nav a {
+  padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); text-decoration: none; white-space: nowrap;
+}
+.page-nav a:hover, .page-nav a[aria-current="page"] {
+  color: var(--accent); border-color: var(--accent);
+}
 
 .container { padding: 18px; max-width: 1000px; margin: 0 auto; }
 
