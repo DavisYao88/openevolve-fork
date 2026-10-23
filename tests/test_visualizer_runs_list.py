@@ -308,6 +308,49 @@ class TestVisualizerRunsList(unittest.TestCase):
         for path in ("/api/runs/missing", "/api/runs/missing/log", "/api/runs/missing/progress"):
             self.assertEqual(self.client.get(path).status_code, 404, path)
 
+    def test_progress_reports_islands_and_log_tail(self):
+        run_dir = self._make_run(
+            "evolve_task_20261023120000", iterations=10, programs=["seed", "child"]
+        )
+        self._write_log(
+            "evolve_task_20261023120000",
+            [
+                "2026-10-23 18:30:46,410 - INFO - Island Status:",
+                "2026-10-23 18:30:46,411 - INFO -  * Island 0: 2 programs, best=0.0000, "
+                "avg=0.0000, diversity=0.00, gen=1 (best: seed)",
+                "2026-10-23 18:30:46,411 - INFO -    Island 1: 1 programs, best=0.0000, "
+                "avg=0.0000, diversity=12.50, gen=0 (best: child)",
+                "2026-10-23 18:31:00,000 - INFO - Performing migration at iteration 5",
+                "2026-10-23 18:31:01,000 - INFO - 🌟 New best solution found at iteration 5: child",
+            ],
+        )
+        # The checkpoint metadata is the source of truth for per-island membership.
+        checkpoint = run_dir / "output" / "checkpoints" / "checkpoint_10"
+        (checkpoint / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "islands": [["seed"], ["child"]],
+                    "archive": ["seed", "child"],
+                    "island_best_programs": ["seed", "child"],
+                    "island_generations": [3, 2],
+                    "last_iteration": 10,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        payload = self.client.get("/api/runs/evolve_task_20261023120000/progress").get_json()
+
+        islands = {entry["index"]: entry for entry in payload["islands"]}
+        self.assertEqual(set(islands), {0, 1})
+        self.assertEqual(islands[0]["programs"], 1)
+        self.assertEqual(islands[0]["generation"], 3)
+        self.assertEqual(islands[0]["best_program_id"], "seed")
+        self.assertEqual(islands[1]["diversity"], 12.5)
+        self.assertEqual(payload["migrations"], [5])
+        self.assertEqual(payload["best_events"][0]["program_id"], "child")
+        self.assertTrue(any("Island Status" in line for line in payload["log_tail"]))
+
 
 if __name__ == "__main__":
     unittest.main()

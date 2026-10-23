@@ -1,0 +1,25 @@
+name: 通用参数调优
+description: 只搜索顶层参数字典的取值，算法逻辑固定；适合"配方/超参"类任务。
+defaults:
+  iterations: 30
+
+files:
+  initial_program: init.py
+  prompt: prompt.md
+  adapter: runner_adapter.py
+
+# 评分：score = -log(loss) * 100（换成自己的指标只需改 name / direction）
+objective:
+  metrics:
+    - name: loss
+      direction: minimize
+      transform: log
+      scale: 100
+
+validation:
+  mode: params_dict
+  variable: PARAMS
+  ranges:
+    step_size: {min: 0.0001, max: 0.02, type: float}
+    momentum: {min: 0.0, max: 0.99, type: float}
+    restarts: {min: 1, max: 20, type: int}

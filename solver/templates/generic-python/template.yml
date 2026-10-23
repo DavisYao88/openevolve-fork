@@ -1,0 +1,19 @@
+name: 通用程序演化
+description: 自由改写 solve() 里的算法；候选程序只需返回指标字典，不做结构约束。
+defaults:
+  iterations: 30
+
+files:
+  initial_program: initial_program.py
+  prompt: prompt.md
+  adapter: runner_adapter.py
+
+# 评分：candidate 返回的 score 越大越好（多指标时按 weight 加权求和）
+objective:
+  metrics:
+    - name: score
+      direction: maximize
+
+# 通用演化不做结构校验：候选程序可以自由改写算法。
+validation:
+  mode: none

@@ -14,8 +14,11 @@ async function request(url, options = {}) {
 }
 
 export const api = {
-  evolution(runId = "") {
-    const query = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
+  evolution(runId = "", checkpoint = "") {
+    const params = new URLSearchParams();
+    if (runId) params.set("run_id", runId);
+    if (checkpoint) params.set("checkpoint", checkpoint);
+    const query = params.toString() ? `?${params.toString()}` : "";
     return request(`/api/data${query}`);
   },
   runs() {
@@ -30,8 +33,22 @@ export const api = {
   runLog(runId, offset = 0) {
     return request(`/api/runs/${encodeURIComponent(runId)}/log?offset=${offset}`);
   },
-  launchDefaults() {
-    return request("/api/launch");
+  runCheckpoints(runId) {
+    return request(`/api/runs/${encodeURIComponent(runId)}/checkpoints`);
+  },
+  cancelRun(runId) {
+    return request(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
+  },
+  exportRun(runId, checkpoint = "") {
+    return request(`/api/runs/${encodeURIComponent(runId)}/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checkpoint }),
+    });
+  },
+  launchDefaults(templateId = "") {
+    const query = templateId ? `?template=${encodeURIComponent(templateId)}` : "";
+    return request(`/api/launch${query}`);
   },
   currentRun() {
     return request("/api/run");

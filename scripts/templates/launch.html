@@ -28,6 +28,22 @@
 
     <form id="run-form">
       <section class="field">
+        <label for="template">任务模板</label>
+        <p class="help">模板提供默认的初始程序、提示词、评测脚本、评分方式与候选校验；切换模板会覆盖下方内容。</p>
+        <select id="template" name="template">
+          {% for item in templates %}
+          <option value="{{ item.id }}" {% if item.id == default_template %}selected{% endif %}>{{ item.name }}</option>
+          {% endfor %}
+        </select>
+      </section>
+
+      <section class="field">
+        <label for="task-name">任务名称</label>
+        <p class="help">留空则使用模板名称，仅用于任务列表展示。</p>
+        <input id="task-name" name="task_name" type="text" maxlength="80" placeholder="{{ template_name }}"/>
+      </section>
+
+      <section class="field">
         <label for="prompt">任务提示词（Markdown）</label>
         <p class="help">输入本次进化任务的目标、约束和评分说明。</p>
         <textarea id="prompt" name="prompt" spellcheck="false" required>{{ prompt }}</textarea>
@@ -40,9 +56,15 @@
       </section>
 
       <section class="field">
-        <label for="evaluator">训练评估脚本代码</label>
-        <p class="help">必须提供真实可运行的训练评估脚本：接收候选 init.py 路径，并向标准输出返回包含 wmape、bias_ratio 的 JSON。本次任务会自动把它配置为 runner_command。</p>
+        <label for="evaluator">评测脚本代码</label>
+        <p class="help">必须提供真实可运行的评测脚本：接收候选程序路径，并向标准输出返回包含指标的 JSON（例如 {"score": 0.9}）。本次任务会自动把它配置为 runner_command。</p>
         <textarea id="evaluator" name="evaluator" spellcheck="false" required>{{ evaluator }}</textarea>
+      </section>
+
+      <section class="field">
+        <label for="objective">评分配置 objective（YAML，可留空）</label>
+        <p class="help">把评测脚本返回的指标折算成 combined_score（越大越好）。留空表示沿用模板配置。</p>
+        <textarea id="objective" name="objective" spellcheck="false">{{ objective_yaml }}</textarea>
       </section>
 
       <section class="field">

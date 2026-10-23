@@ -1,6 +1,7 @@
 """Tests for the local run-configuration UI."""
 
 import importlib.util
+import json
 import os
 import runpy
 import sys
@@ -24,7 +25,8 @@ class TestVisualizerRunUI(unittest.TestCase):
         with patch.object(sys, "path", [str(VISUALIZER.parent), *sys.path]):
             cls.visualizer = runpy.run_path(str(VISUALIZER))
         cls.global_config_source = cls.visualizer["GLOBAL_CONFIG_PATH"]
-        cls.task_files_dir = cls.visualizer["TASK_FILES_DIR"]
+        cls.template_root = cls.visualizer["TEMPLATE_DIR"]
+        cls.default_template = cls.visualizer["DEFAULT_TEMPLATE_ID"]
 
     def setUp(self):
         self.visualizer = self.__class__.visualizer
@@ -38,17 +40,20 @@ class TestVisualizerRunUI(unittest.TestCase):
         self.global_config.write_text(source_config, encoding="utf-8")
         self.module_globals["GUI_RUNS_DIR"] = self.gui_runs
         self.module_globals["GLOBAL_CONFIG_PATH"] = self.global_config
-        self.module_globals["TASK_FILES_DIR"] = self.__class__.task_files_dir
+        self.module_globals["TEMPLATE_DIR"] = self.__class__.template_root
         self.original_global_config = source_config
+        self.template_dir = self.__class__.template_root / self.__class__.default_template
         self.source_files = {
-            name: (self.__class__.task_files_dir / name).read_text(encoding="utf-8")
-            for name in ("init.py", "evaluator.py", "runner_adapter.py", "prompt.md", "config.yml")
+            name: (self.template_dir / name).read_text(encoding="utf-8")
+            for name in ("init.py", "runner_adapter.py", "prompt.md")
         }
         self.client = self.visualizer["app"].test_client()
 
     @staticmethod
     def payload(**overrides):
         value = {
+            "template": "famou-调参",
+            "task_name": "测试任务",
             "initial_program": "def run_search():\n    return 1\n",
             "prompt": "Tune only the parameter values.",
             "evaluator": "import json, sys\nprint(json.dumps({'wmape': 0.1, 'bias_ratio': 0.0}))\n",
@@ -57,15 +62,16 @@ class TestVisualizerRunUI(unittest.TestCase):
         value.update(overrides)
         return value
 
-    def test_launch_page_loads_famou_task_editors(self):
+    def test_launch_page_loads_solver_editors(self):
         response = self.client.get("/launch")
 
         self.assertEqual(response.status_code, 200)
+        self.assertIn("任务模板".encode(), response.data)
+        self.assertIn("任务名称".encode(), response.data)
         self.assertIn("初始程序代码".encode(), response.data)
         self.assertIn("任务提示词（Markdown）".encode(), response.data)
-        self.assertIn("训练评估脚本代码".encode(), response.data)
-        self.assertIn("自动把它配置为 runner_command".encode(), response.data)
-        self.assertIn("仓店出库量".encode(), response.data)
+        self.assertIn("评测脚本代码".encode(), response.data)
+        self.assertIn("评分配置".encode(), response.data)
         self.assertIn("进化轮数".encode(), response.data)
         self.assertNotIn("导入".encode(), response.data)
         self.assertNotIn("配置文件（YAML）".encode(), response.data)
@@ -80,6 +86,36 @@ class TestVisualizerRunUI(unittest.TestCase):
         self.assertEqual(payload["evaluator"], self.source_files["runner_adapter.py"])
         self.assertEqual(payload["prompt"], self.source_files["prompt.md"])
         self.assertGreater(payload["iterations"], 0)
+        self.assertEqual(payload["default_template"], self.__class__.default_template)
+        self.assertTrue(payload["templates"])
+        self.assertIn("wmape", (payload["objective"] or {}).get("metrics", [{}])[0].get("name", ""))
+
+    def test_launch_defaults_api_switches_template(self):
+        response = self.client.get("/api/launch?template=generic-python")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["template"]["id"], "generic-python")
+        self.assertIn("def solve()", payload["initial_program"])
+
+    def test_run_rejects_unknown_template(self):
+        response = self.client.post(
+            "/api/run",
+            json=self.payload(template="does-not-exist"),
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_run_rejects_invalid_objective(self):
+        response = self.client.post(
+            "/api/run",
+            json=self.payload(objective={"metrics": [{"name": "score", "direction": "up"}]}),
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("direction", response.get_json()["error"])
 
     def test_visualizer_has_grouped_toolbar_and_in_page_launch_dialog(self):
         response = self.client.get("/")
@@ -180,7 +216,7 @@ class TestVisualizerRunUI(unittest.TestCase):
         for name, original_content in self.source_files.items():
             with self.subTest(source_file=name):
                 self.assertEqual(
-                    (self.__class__.task_files_dir / name).read_text(encoding="utf-8"),
+                    (self.template_dir / name).read_text(encoding="utf-8"),
                     original_content,
                 )
         self.assertTrue((output_dir / "experiment.log").is_file())
@@ -198,6 +234,33 @@ class TestVisualizerRunUI(unittest.TestCase):
         status = self.client.get("/api/run").get_json()["run"]
         self.assertIn("Logging to evolve_tasks/sample/output/log.txt", status["log"])
         self.assertNotIn(str(self.module_globals["PROJECT_ROOT"]), status["log"])
+
+    def test_run_records_template_objective_and_task_name(self):
+        process = MagicMock()
+        process.poll.return_value = None
+        import yaml
+
+        objective = {"metrics": [{"name": "quality", "direction": "maximize"}]}
+        with patch("subprocess.Popen", return_value=process):
+            response = self.client.post(
+                "/api/run",
+                json=self.payload(objective=objective, task_name="我的任务"),
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 202)
+        run_dir = Path(self.module_globals["current_run"]["run_dir"])
+        generated_config = yaml.safe_load(
+            (run_dir / "input" / "config.yaml").read_text(encoding="utf-8")
+        )
+        evaluator_args = generated_config["evaluator"]["evaluator_args"]
+        self.assertEqual(evaluator_args["objective"], objective)
+        self.assertEqual(evaluator_args["validation"]["mode"], "params_dict")
+        self.assertEqual(evaluator_args["reference_program_path"], str(run_dir / "input" / "init.py"))
+
+        manifest = json.loads((run_dir / "input" / "task.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["name"], "我的任务")
+        self.assertEqual(manifest["template"], "famou-调参")
 
     def test_ollama_config_does_not_require_codex_cli(self):
         import yaml

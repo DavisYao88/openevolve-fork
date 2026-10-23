@@ -920,7 +920,35 @@ python scripts/visualizer.py
 python scripts/visualizer.py --path examples/function_minimization/openevolve_output/checkpoints/checkpoint_100/
 ```
 
-打开 `http://127.0.0.1:8080/launch` 可在浏览器中配置并启动任务。页面只提供提示词、初始程序、评估器代码和进化轮数四项输入，不提供文件导入，也不显示运行 YAML。默认内容从 `famou/调参/` 读取；隐藏的全局运行配置为 `evolve_tasks/global_config.yml`。启动时服务把表单代码复制到本次任务目录，并自动生成指向本轮 `input/runner_adapter.py` 的 `evaluator.evaluator_args.runner_command`；提示词模板指向本轮 `input/prompt.md`。页面不会改写 `famou/调参/` 下的源文件；本轮输入副本、生成的运行配置和输出均保存在 `evolve_tasks/evolve_task_<时间戳>/input` 与 `output`。页面中的评测器代码需实现真实训练适配器；该页面会在本机执行 Python 代码，仅应在可信机器上使用。OpenEvolve 的 checkpoint 保存在任务 `output/checkpoints/` 下，控制台日志保存在 `output/experiment.log`。
+打开 `http://127.0.0.1:8080/launch` 可在浏览器中配置并启动任务。页面先选择 **任务模板**（`solver/templates/` 下的每个目录就是一个模板），再填写任务名称、提示词、初始程序、评测脚本和进化轮数；评分方式（`objective`）与候选校验（`validation`）可在"高级配置"里用 YAML 覆盖，留空则沿用模板。页面不提供文件导入，也不显示完整运行 YAML。隐藏的全局运行配置（模型、数据库、超时）在 `evolve_tasks/global_config.yml`。
+
+启动时服务把表单代码复制到本次任务目录：输入副本、生成的运行配置与 `task.json` 写入 `evolve_tasks/evolve_task_<时间戳>/input`，输出写入同级的 `output`（checkpoint 在 `output/checkpoints/`，控制台日志在 `output/experiment.log`）。服务自动生成指向本轮 `input/runner_adapter.py` 的 `evaluator.evaluator_args.runner_command`，并把通用评估器 `solver/evaluator.py` 复制为本轮 `input/evaluator_callback.py`；提示词模板指向本轮 `input/prompt.md`。页面不会改写模板目录下的源文件。评测脚本必须跑真实链路；该页面会在本机执行 Python 代码，仅应在可信机器上使用。
+
+## 公共演化求解器
+
+`solver/` 把 OpenEvolve 变成通用的**演化求解器**：评估器不认识任何业务指标，任务差异全部由配置描述。
+
+```yaml
+# 求解契约：候选程序 → 评测命令 → 指标 JSON → combined_score（越大越好）
+evaluator:
+  evaluator_args:
+    runner_command: ["python", "runner_adapter.py", "{program_path}"]
+    objective:                      # 怎么算分
+      metrics:
+        - {name: wmape,     direction: minimize, transform: log, scale: 100}
+        - {name: bias_ratio, direction: minimize, threshold: 0.05, scale: 100}
+    validation:                     # 候选程序允许怎么改
+      mode: params_dict             # none | params_dict
+      variable: PARAMS
+      ranges: {learning_rate: {min: 0.005, max: 0.3, type: float}}
+```
+
+- **评测脚本**只向 stdout 打印一个指标 JSON 对象（如 `{"wmape": 0.12, "bias_ratio": -0.02}`），日志写 stderr。
+- **objective** 把任意指标折算成 `combined_score`；多个指标按权重加权，惩罚项写成一条 `minimize` 指标即可。
+- **validation** 支持 `params_dict`（只允许改参数字典的值，带范围/布尔/枚举/交叉约束）与 `none`（自由改写算法）。
+- **模板**`solver/templates/` 自带 `famou-调参`、`param-tuning`、`generic-python` 三个模板，复制目录改 `template.yml` 即是新任务。
+
+详见 [solver/README.md](solver/README.md)。
 
 ### Standalone Vue 3 frontend
 

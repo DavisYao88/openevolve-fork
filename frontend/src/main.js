@@ -5,6 +5,7 @@ import EvolutionView from "./views/EvolutionView.vue";
 import ManualView from "./views/ManualView.vue";
 import LaunchView from "./views/LaunchView.vue";
 import RunsView from "./views/RunsView.vue";
+import RunDetailView from "./views/RunDetailView.vue";
 import ProgramView from "./views/ProgramView.vue";
 import "./style.css";
 
@@ -15,6 +16,7 @@ const router = createRouter({
     { path: "/manual", component: ManualView },
     { path: "/launch", component: LaunchView },
     { path: "/runs", component: RunsView },
+    { path: "/runs/:id", component: RunDetailView },
     { path: "/program/:id", component: ProgramView },
   ],
 });

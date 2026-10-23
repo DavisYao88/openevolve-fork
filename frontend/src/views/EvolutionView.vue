@@ -1,15 +1,19 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 
 const route = useRoute();
 const router = useRouter();
-const data = ref({ archive: [], nodes: [], edges: [], checkpoint_dir: "" });
+const data = ref({ archive: [], nodes: [], edges: [], checkpoint_dir: "", checkpoints: [], feature_maps: [] });
 const selectedId = ref("");
 const metric = ref(localStorage.getItem("openevolve.metric") || "");
 const highlight = ref("top");
 const view = ref("tree");
+const selectedCheckpoint = ref("");
+const zoom = ref(1);
+const panX = ref(0);
+const panY = ref(0);
 const showIslands = ref(false);
 const search = ref("");
 const sort = ref("generation");
@@ -35,6 +39,73 @@ const chartWidth = 1120;
 const chartHeight = computed(() => Math.max(480, nodes.value.length * 54 + 90));
 
 const runId = computed(() => route.query.run_id || "");
+const checkpoints = computed(() => data.value.checkpoints || []);
+const featureMaps = computed(() => (data.value.feature_maps || []).filter((grid) => grid.cells?.length));
+const mapFitnessRange = computed(() => {
+  const values = featureMaps.value
+    .flatMap((grid) => grid.cells.map((cell) => cell.fitness))
+    .filter((value) => typeof value === "number" && Number.isFinite(value));
+  if (!values.length) return { min: 0, max: 1 };
+  return { min: Math.min(...values), max: Math.max(...values) };
+});
+
+function cellColor(cell) {
+  if (typeof cell.fitness !== "number" || !Number.isFinite(cell.fitness)) return "#dfe5ee";
+  const { min, max } = mapFitnessRange.value;
+  const ratio = max === min ? 1 : (cell.fitness - min) / (max - min);
+  return `hsl(${Math.round(210 - ratio * 170)} ${Math.round(45 + ratio * 40)}% ${Math.round(72 - ratio * 26)}%)`;
+}
+
+function gridGeometry(grid) {
+  const size = 26;
+  const binsX = Math.max(grid.bins_x || 1, 1);
+  const binsY = Math.max(grid.bins_y || 1, 1);
+  return { size, width: binsX * size, height: binsY * size };
+}
+
+function cellRect(cell, geometry, grid) {
+  const binsY = Math.max(grid.bins_y || 1, 1);
+  return { x: cell.x * geometry.size, y: (binsY - 1 - cell.y) * geometry.size };
+}
+
+function resetView() {
+  zoom.value = 1;
+  panX.value = 0;
+  panY.value = 0;
+}
+
+function onWheel(event) {
+  const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+  zoom.value = Math.min(6, Math.max(0.3, zoom.value * factor));
+}
+
+let dragging = false;
+let dragStart = { x: 0, y: 0, panX: 0, panY: 0 };
+
+function startDrag(event) {
+  dragging = true;
+  dragStart = { x: event.clientX, y: event.clientY, panX: panX.value, panY: panY.value };
+}
+
+function onDrag(event) {
+  if (!dragging) return;
+  panX.value = dragStart.panX + (event.clientX - dragStart.x) / zoom.value;
+  panY.value = dragStart.panY + (event.clientY - dragStart.y) / zoom.value;
+}
+
+function endDrag() {
+  dragging = false;
+}
+
+watch(
+  () => route.query.checkpoint || "",
+  (value) => {
+    selectedCheckpoint.value = value;
+  },
+  { immediate: true },
+);
+
+watch(selectedCheckpoint, () => loadData());
 const statusLabels = { running: "运行中", completed: "已完成", failed: "失败", interrupted: "已中断", pending: "等待启动" };
 const stageLabels = { llm: "模型生成", diff: "差异应用", evaluation: "评测" };
 const progressPercent = computed(() => {
@@ -47,6 +118,8 @@ const lastIteration = computed(() => {
   const iterations = progress.value?.iterations || [];
   return iterations.length ? iterations[iterations.length - 1] : null;
 });
+const islands = computed(() => progress.value?.islands || []);
+const logTail = computed(() => progress.value?.log_tail || []);
 
 const coordinates = computed(() => {
   const grouped = new Map();
@@ -109,7 +182,7 @@ function scoreLabel(node) {
 async function loadData() {
   try {
     error.value = "";
-    const response = await api.evolution(route.query.run_id || "");
+    const response = await api.evolution(route.query.run_id || "", selectedCheckpoint.value);
     data.value = response;
     if (!metric.value || !metrics.value.includes(metric.value)) metric.value = metrics.value[0] || "";
     if (!selected.value && nodes.value.length) selectedId.value = "";
@@ -189,7 +262,7 @@ onUnmounted(() => {
         <p>{{ route.query.run_id ? `任务 ${route.query.run_id}` : (data.checkpoint_dir || "等待检查点数据") }}</p>
       </div>
       <div class="view-switch">
-        <button v-for="item in [['tree','进化树'],['trend','性能趋势'],['list','程序列表']]" :key="item[0]" class="button" :class="{ selected: view === item[0] }" @click="view = item[0]">{{ item[1] }}</button>
+        <button v-for="item in [['tree','进化树'],['trend','性能趋势'],['list','程序列表'],['map','特征地图']]" :key="item[0]" class="button" :class="{ selected: view === item[0] }" @click="view = item[0]">{{ item[1] }}</button>
       </div>
     </div>
 
@@ -210,6 +283,12 @@ onUnmounted(() => {
         </select>
       </label>
       <label v-if="view !== 'list'" class="check-control"><input v-model="showIslands" type="checkbox">按岛屿分组</label>
+      <label v-if="checkpoints.length" class="checkpoint-control">检查点
+        <select v-model="selectedCheckpoint" class="select-input">
+          <option value="">最新</option>
+          <option v-for="item in checkpoints" :key="item.name" :value="item.name">{{ item.name }} · {{ item.programs }} 程序</option>
+        </select>
+      </label>
       <span class="refresh-label"><span class="live-dot"></span>每 3 秒刷新</span>
     </div>
 
@@ -241,6 +320,24 @@ onUnmounted(() => {
       <p v-if="progress.status === 'running' && !progress.has_checkpoint" class="progress-hint">
         正在运行。检查点按固定轮次间隔保存，生成之前下方图表不会出现程序节点。
       </p>
+
+      <div v-if="islands.length" class="island-grid">
+        <article v-for="island in islands" :key="island.index" class="island-card">
+          <header><strong>岛屿 {{ island.index }}</strong><span>第 {{ island.generation }} 代</span></header>
+          <div class="island-stats">
+            <div><small>程序</small><b>{{ island.programs }}</b></div>
+            <div><small>最高分</small><b>{{ Number(island.best_score).toFixed(4) }}</b></div>
+            <div><small>平均分</small><b>{{ Number(island.avg_score).toFixed(4) }}</b></div>
+            <div><small>多样性</small><b>{{ Number(island.diversity).toFixed(2) }}</b></div>
+          </div>
+          <p v-if="island.best_program_id" class="island-best">最优 <code>{{ island.best_program_id }}</code></p>
+        </article>
+      </div>
+
+      <details v-if="logTail.length" class="log-panel" open>
+        <summary>运行日志（最近 {{ logTail.length }} 行）</summary>
+        <pre>{{ logTail.join("\n") }}</pre>
+      </details>
     </section>
 
     <p v-if="error" class="message error">{{ error }}</p>
@@ -250,21 +347,28 @@ onUnmounted(() => {
     <div v-else-if="view === 'tree'" class="workspace">
       <section class="card chart-card">
         <div class="chart-heading">
-          <div><h2>程序演化关系</h2><p>横轴为代数；节点大小代表当前指标表现</p></div>
-          <span class="count-pill">{{ nodes.length }} 个程序 · {{ maxGeneration + 1 }} 代</span>
+          <div><h2>程序演化关系</h2><p>横轴为代数；滚轮缩放，按住拖拽平移</p></div>
+          <div class="zoom-controls">
+            <span class="count-pill">{{ nodes.length }} 个程序 · {{ maxGeneration + 1 }} 代</span>
+            <button class="button zoom-button" @click="zoom = Math.min(6, zoom * 1.2)">＋</button>
+            <button class="button zoom-button" @click="zoom = Math.max(0.3, zoom / 1.2)">－</button>
+            <button class="button zoom-button" @click="resetView">{{ Math.round(zoom * 100) }}%</button>
+          </div>
         </div>
         <div class="svg-scroll">
-          <svg :viewBox="`0 0 ${chartWidth} ${Math.max(chartHeight, 480)}`" class="tree-chart" role="img" aria-label="程序演化关系图">
-            <g v-for="edge in data.edges" :key="`${edge.source}-${edge.target}`">
-              <line v-if="coordinates.has(edge.source) && coordinates.has(edge.target)" :x1="coordinates.get(edge.source).x" :y1="coordinates.get(edge.source).y" :x2="coordinates.get(edge.target).x" :y2="coordinates.get(edge.target).y" class="tree-edge" />
-            </g>
-            <g v-for="generation in maxGeneration + 1" :key="generation">
-              <line :x1="70 + (generation - 1) / Math.max(maxGeneration, 1) * (chartWidth - 150)" y1="28" :x2="70 + (generation - 1) / Math.max(maxGeneration, 1) * (chartWidth - 150)" :y2="Math.max(chartHeight, 480) - 20" class="generation-guide" />
-              <text :x="70 + (generation - 1) / Math.max(maxGeneration, 1) * (chartWidth - 150)" y="19" text-anchor="middle" class="axis-label">第 {{ generation - 1 }} 代</text>
-            </g>
-            <g v-for="node in nodes" :key="node.id" class="tree-node" :class="{ chosen: selectedId === node.id, highlighted: isHighlighted(node) }" @click="selectNode(node.id)">
-              <circle :cx="coordinates.get(node.id)?.x" :cy="coordinates.get(node.id)?.y" :r="isHighlighted(node) ? 14 : 10" :fill="isHighlighted(node) ? '#e8a63b' : `hsl(${(Number(node.island || 0) * 67 + 210) % 360} 58% 55%)`" />
-              <text :x="coordinates.get(node.id)?.x + 16" :y="coordinates.get(node.id)?.y + 4" class="node-label">{{ scoreLabel(node) }}</text>
+          <svg :viewBox="`0 0 ${chartWidth} ${Math.max(chartHeight, 480)}`" class="tree-chart" role="img" aria-label="程序演化关系图" @wheel.prevent="onWheel" @mousedown="startDrag" @mousemove="onDrag" @mouseup="endDrag" @mouseleave="endDrag">
+            <g :transform="`translate(${panX} ${panY}) scale(${zoom})`">
+              <g v-for="edge in data.edges" :key="`${edge.source}-${edge.target}`">
+                <line v-if="coordinates.has(edge.source) && coordinates.has(edge.target)" :x1="coordinates.get(edge.source).x" :y1="coordinates.get(edge.source).y" :x2="coordinates.get(edge.target).x" :y2="coordinates.get(edge.target).y" class="tree-edge" />
+              </g>
+              <g v-for="generation in maxGeneration + 1" :key="generation">
+                <line :x1="70 + (generation - 1) / Math.max(maxGeneration, 1) * (chartWidth - 150)" y1="28" :x2="70 + (generation - 1) / Math.max(maxGeneration, 1) * (chartWidth - 150)" :y2="Math.max(chartHeight, 480) - 20" class="generation-guide" />
+                <text :x="70 + (generation - 1) / Math.max(maxGeneration, 1) * (chartWidth - 150)" y="19" text-anchor="middle" class="axis-label">第 {{ generation - 1 }} 代</text>
+              </g>
+              <g v-for="node in nodes" :key="node.id" class="tree-node" :class="{ chosen: selectedId === node.id, highlighted: isHighlighted(node) }" @click="selectNode(node.id)">
+                <circle :cx="coordinates.get(node.id)?.x" :cy="coordinates.get(node.id)?.y" :r="isHighlighted(node) ? 14 : 10" :fill="isHighlighted(node) ? '#e8a63b' : `hsl(${(Number(node.island || 0) * 67 + 210) % 360} 58% 55%)`" />
+                <text :x="coordinates.get(node.id)?.x + 16" :y="coordinates.get(node.id)?.y + 4" class="node-label">{{ scoreLabel(node) }}</text>
+              </g>
             </g>
           </svg>
         </div>
@@ -290,6 +394,35 @@ onUnmounted(() => {
           </g>
         </svg>
       </div>
+      <p v-if="selected" class="selected-caption">已选择 {{ selected.id }} · {{ activeMetric }}: {{ scoreLabel(selected) }}</p>
+    </section>
+
+    <section v-else-if="view === 'map'" class="card chart-card">
+      <div class="chart-heading">
+        <div><h2>MAP-Elites 特征地图</h2><p>每个格子是该特征区间内的最优程序；颜色越深表示 fitness 越高</p></div>
+        <span class="count-pill">{{ featureMaps.length }} 个岛屿</span>
+      </div>
+      <div v-if="featureMaps.length" class="map-grid">
+        <article v-for="grid in featureMaps" :key="grid.island" class="map-card">
+          <header><strong>岛屿 {{ grid.island }}</strong><span>{{ (grid.dimensions || []).join(" / ") }}</span></header>
+          <svg :viewBox="`0 0 ${gridGeometry(grid).width} ${gridGeometry(grid).height}`" class="map-svg" role="img" aria-label="MAP-Elites 特征网格">
+            <rect
+              v-for="cell in grid.cells"
+              :key="`${cell.x}-${cell.y}`"
+              :x="cellRect(cell, gridGeometry(grid), grid).x"
+              :y="cellRect(cell, gridGeometry(grid), grid).y"
+              :width="gridGeometry(grid).size - 1"
+              :height="gridGeometry(grid).size - 1"
+              :fill="cellColor(cell)"
+              class="map-cell"
+              :class="{ chosen: selectedId === cell.program_id }"
+              @click="selectNode(cell.program_id)"
+            />
+          </svg>
+          <p class="map-hint">{{ grid.bins_x }} × {{ grid.bins_y }} 格 · 已占用 {{ grid.cells.length }}</p>
+        </article>
+      </div>
+      <p v-else class="empty-state">当前检查点还没有 MAP-Elites 网格数据。</p>
       <p v-if="selected" class="selected-caption">已选择 {{ selected.id }} · {{ activeMetric }}: {{ scoreLabel(selected) }}</p>
     </section>
 
@@ -395,6 +528,20 @@ export default { components: { NodeDetail } };
 .progress-stats strong { font-size:12px; overflow-wrap:anywhere; }
 .progress-last, .progress-hint { margin:12px 0 0; color:#57647a; font-size:11px; overflow-wrap:anywhere; }
 .progress-hint { color:var(--muted); }
+.island-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:10px; margin-top:14px; }
+.island-card { padding:12px; border:1px solid var(--line); border-radius:10px; background:#fafbfe; }
+.island-card header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+.island-card header strong { font-size:12px; }
+.island-card header span { color:var(--muted); font-size:10px; }
+.island-stats { display:grid; grid-template-columns:repeat(2, 1fr); gap:8px; margin-top:10px; }
+.island-stats > div { display:flex; flex-direction:column; gap:2px; }
+.island-stats small { color:var(--muted); font-size:10px; }
+.island-stats b { font-size:12px; }
+.island-best { margin:10px 0 0; color:var(--muted); font-size:10px; overflow-wrap:anywhere; }
+.island-best code { font-size:10px; }
+.log-panel { margin-top:14px; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+.log-panel summary { padding:10px 12px; background:#f8f9fc; color:#68748a; font-size:11px; cursor:pointer; }
+.log-panel pre { max-height:280px; margin:0; overflow:auto; padding:12px; background:#172033; color:#d7e0f1; font:10px/1.5 "IBM Plex Mono", monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
 .view-switch { display:flex; gap:5px; padding:4px; border:1px solid var(--line); border-radius:10px; background:#fff; }
 .view-switch .button { min-height:34px; border:0; background:transparent; box-shadow:none; }
 .view-switch .button.selected { background:var(--accent-soft); color:var(--accent); }
@@ -451,6 +598,22 @@ export default { components: { NodeDetail } };
 .trend-point circle { stroke:#fff; stroke-width:2; }
 .trend-point.highlighted circle, .trend-point.chosen circle { stroke:#e5a02c; stroke-width:3; }
 .selected-caption { padding:0 22px 14px; color:var(--muted); font-size:12px; }
+.zoom-controls { display:flex; align-items:center; gap:8px; }
+.zoom-button { min-height:30px; padding:4px 9px; font-size:11px; }
+.tree-chart { cursor:grab; }
+.tree-chart:active { cursor:grabbing; }
+.checkpoint-control .select-input { width:auto; min-width:180px; min-height:34px; padding:6px 10px; font-size:12px; }
+.map-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; padding:4px 22px 18px; }
+.map-card { border:1px solid var(--line); border-radius:10px; padding:12px; background:#fafbfe; }
+.map-card header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:10px; }
+.map-card header strong { font-size:12px; }
+.map-card header span { color:var(--muted); font-size:10px; }
+.map-svg { display:block; width:100%; height:auto; border:1px solid #e6eaf2; border-radius:6px; background:#fff; }
+.map-cell { cursor:pointer; }
+.map-cell:hover { stroke:#263b79; stroke-width:1.5; }
+.map-cell.chosen { stroke:#e5a02c; stroke-width:2; }
+.map-hint { margin:8px 0 0; color:var(--muted); font-size:10px; }
+.empty-state { padding:0 22px 18px; color:var(--muted); font-size:12px; }
 .list-card { overflow:hidden; }
 .list-toolbar { display:flex; gap:10px; padding:16px; border-bottom:1px solid var(--line); }
 .list-toolbar .text-input { max-width:360px; }

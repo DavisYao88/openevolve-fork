@@ -4,8 +4,33 @@ const statusBadge = document.getElementById("status-badge");
 const statusMessage = document.getElementById("status-message");
 const logElement = document.getElementById("run-log");
 const visualizerLink = document.getElementById("open-visualizer");
+const templateSelect = document.getElementById("template");
+const objectiveInput = document.getElementById("objective");
+const taskNameInput = document.getElementById("task-name");
 
 let pollTimer = null;
+
+async function loadTemplate(templateId) {
+  const response = await fetch(`/api/launch?template=${encodeURIComponent(templateId)}`, { cache: "no-store" });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || `请求失败（${response.status}）`);
+  document.getElementById("prompt").value = payload.prompt;
+  document.getElementById("initial-program").value = payload.initial_program;
+  document.getElementById("evaluator").value = payload.evaluator;
+  document.getElementById("iterations").value = payload.iterations;
+  objectiveInput.value = payload.objective_yaml || "";
+  taskNameInput.placeholder = payload.template.name;
+}
+
+if (templateSelect) {
+  templateSelect.addEventListener("change", async () => {
+    try {
+      await loadTemplate(templateSelect.value);
+    } catch (error) {
+      statusMessage.textContent = `无法读取模板：${error.message}`;
+    }
+  });
+}
 
 function showRun(run) {
   if (!run) return;
@@ -50,9 +75,12 @@ form.addEventListener("submit", async (event) => {
   logElement.textContent = "";
 
   const payload = {
+    template: templateSelect.value,
+    task_name: taskNameInput.value,
     initial_program: document.getElementById("initial-program").value,
     prompt: document.getElementById("prompt").value,
     evaluator: document.getElementById("evaluator").value,
+    objective: objectiveInput.value,
     iterations: Number(document.getElementById("iterations").value),
   };
 

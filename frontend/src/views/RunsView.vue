@@ -37,13 +37,20 @@ onUnmounted(() => window.clearInterval(timer));
     <div v-else class="runs-table card">
       <div class="table-head"><span>任务</span><span>状态</span><span>模型</span><span>轮数 / 程序</span><span>最高分</span><span>更新时间</span><span></span></div>
       <article v-for="run in runs" :key="run.id" class="run-row">
-        <div class="run-name"><strong>{{ run.id }}</strong><small class="mono">{{ run.run_dir }}</small></div>
+        <div class="run-name">
+          <RouterLink class="run-link" :to="{ path: `/runs/${run.id}` }">{{ run.name || run.id }}</RouterLink>
+          <small class="mono">{{ run.run_dir }}</small>
+          <small v-if="run.template_name" class="run-template">模板：{{ run.template_name }}</small>
+        </div>
         <span class="status-badge" :class="run.status">{{ statusLabel(run.status) }}</span>
         <span class="run-cell">{{ run.model || "—" }}</span>
         <span class="run-cell">{{ run.iterations }} / {{ run.programs }}</span>
         <span class="run-cell mono">{{ run.best_metrics?.combined_score ?? "—" }}</span>
         <span class="run-cell">{{ run.updated_at || "—" }}</span>
-        <RouterLink class="button open-run" :to="{ path: '/', query: { run_id: run.id } }">查看</RouterLink>
+        <div class="row-actions">
+          <RouterLink class="button open-run" :to="{ path: `/runs/${run.id}` }">详情</RouterLink>
+          <RouterLink class="button open-run" :to="{ path: '/', query: { run_id: run.id } }">可视化</RouterLink>
+        </div>
       </article>
     </div>
   </section>
@@ -51,12 +58,16 @@ onUnmounted(() => window.clearInterval(timer));
 
 <style scoped>
 .runs-table { overflow:hidden; }
-.table-head, .run-row { display:grid; grid-template-columns:minmax(180px,1.5fr) 90px minmax(100px,1fr) 100px 110px 150px 65px; align-items:center; gap:14px; padding:13px 16px; }
+.table-head, .run-row { display:grid; grid-template-columns:minmax(180px,1.5fr) 90px minmax(100px,1fr) 100px 110px 150px 140px; align-items:center; gap:14px; padding:13px 16px; }
 .table-head { background:#f8f9fc; color:#78849a; font-size:10px; font-weight:700; }
 .run-row { min-height:67px; border-top:1px solid #edf0f5; font-size:11px; }
 .run-name { display:flex; min-width:0; flex-direction:column; gap:5px; }
-.run-name strong { overflow:hidden; text-overflow:ellipsis; }
+.run-name strong, .run-link { overflow:hidden; text-overflow:ellipsis; font-size:13px; }
+.run-link { color:inherit; text-decoration:none; }
+.run-link:hover { color:var(--accent); text-decoration:underline; }
+.row-actions { display:flex; gap:6px; }
 .run-name small { overflow:hidden; color:var(--muted); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
+.run-template { color:#7d8ba3; }
 .run-cell { overflow:hidden; color:#58667d; text-overflow:ellipsis; white-space:nowrap; }
 .status-badge { width:max-content; padding:5px 8px; border-radius:100px; background:#eef1f5; color:#68748a; font-size:9px; font-weight:700; white-space:nowrap; }
 .status-badge.completed { background:#e7f7ef; color:#178454; }.status-badge.running { background:#e8efff; color:#315fce; }.status-badge.failed { background:#fff0f0; color:#c14242; }.status-badge.interrupted { background:#fff5dd; color:#946407; }

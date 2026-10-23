@@ -6,6 +6,7 @@ import math
 import os
 import re as _re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -24,7 +25,11 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__, template_folder="templates")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GUI_RUNS_DIR = PROJECT_ROOT / "evolve_tasks"
-TASK_FILES_DIR = PROJECT_ROOT / "famou" / "调参"
+# 公共演化求解器：通用评估器 + 任务模板库（模板只描述目标与约束，不含评估器）。
+SOLVER_DIR = PROJECT_ROOT / "solver"
+SOLVER_EVALUATOR_PATH = SOLVER_DIR / "evaluator.py"
+TEMPLATE_DIR = SOLVER_DIR / "templates"
+DEFAULT_TEMPLATE_ID = "famou-调参"
 GLOBAL_CONFIG_PATH = GUI_RUNS_DIR / "global_config.yml"
 # A run whose log has not grown for this long is treated as interrupted rather
 # than running, so a killed process does not look alive forever.
@@ -54,6 +59,78 @@ def _latest_checkpoint_for(checkpoint_root):
     if not os.path.isdir(checkpoint_root):
         return None
     return find_latest_checkpoint(checkpoint_root)
+
+
+def _count_checkpoint_programs(checkpoint_dir: Path) -> int:
+    programs_dir = checkpoint_dir / "programs"
+    try:
+        return len([name for name in os.listdir(programs_dir) if name.endswith(".json")])
+    except OSError:
+        return 0
+
+
+def _checkpoints_root(run_dir: Path) -> Path:
+    return run_dir / "output" / "checkpoints"
+
+
+def _list_checkpoints(run_dir: Path) -> list[dict[str, Any]]:
+    """List checkpoint folders of one run, oldest first."""
+    root = _checkpoints_root(run_dir)
+    if not root.is_dir():
+        return []
+    checkpoints = []
+    for path in root.iterdir():
+        if not path.is_dir() or not path.name.startswith("checkpoint_"):
+            continue
+        try:
+            iteration = int(path.name.rsplit("_", 1)[-1])
+        except (IndexError, ValueError):
+            continue
+        try:
+            updated_at = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M:%S")
+        except OSError:
+            updated_at = ""
+        checkpoints.append(
+            {
+                "name": path.name,
+                "iteration": iteration,
+                "programs": _count_checkpoint_programs(path),
+                "updated_at": updated_at,
+            }
+        )
+    checkpoints.sort(key=lambda item: (item["iteration"], item["name"]))
+    return checkpoints
+
+
+def _resolve_resume_checkpoint(value: str) -> Optional[str]:
+    """Resolve `resume_from` (`<run_id>` or `<run_id>/<checkpoint_name>`).
+
+    Only checkpoints that live inside a run owned by this service are accepted.
+    """
+    parts = value.strip().strip("/").split("/")
+    if not 1 <= len(parts) <= 2 or not all(parts):
+        return None
+    run_dir = _resolve_run_dir(parts[0])
+    if run_dir is None:
+        return None
+    if len(parts) == 1:
+        latest = _latest_checkpoint_for(str(_checkpoints_root(run_dir)))
+        return str(latest) if latest else None
+    resolved = _resolve_checkpoint(run_dir, parts[1])
+    return str(resolved) if resolved else None
+
+
+def _resolve_checkpoint(run_dir: Path, checkpoint_name: str) -> Optional[Path]:
+    """Resolve a checkpoint folder name inside a run, rejecting path traversal."""
+    if not checkpoint_name or "/" in checkpoint_name or "\\" in checkpoint_name:
+        return None
+    if checkpoint_name in {".", ".."} or not checkpoint_name.startswith("checkpoint_"):
+        return None
+    root = _checkpoints_root(run_dir)
+    candidate = (root / checkpoint_name).resolve()
+    if candidate.parent != root.resolve() or not candidate.is_dir():
+        return None
+    return candidate
 
 
 def _read_run_generation(run_dir):
@@ -109,6 +186,18 @@ def _run_summary(run_dir):
         except (OSError, json.JSONDecodeError):
             pass
 
+    # 任务名与模板：本轮启动时写入 input/task.json。
+    task_manifest = {}
+    task_path = input_dir / "task.json"
+    if task_path.is_file():
+        try:
+            with open(task_path, "r", encoding="utf-8") as manifest_file:
+                manifest = json.load(manifest_file)
+            if isinstance(manifest, dict):
+                task_manifest = manifest
+        except (OSError, json.JSONDecodeError):
+            pass
+
     try:
         updated_at = datetime.fromtimestamp(os.path.getmtime(run_dir)).strftime("%Y-%m-%d %H:%M:%S")
     except OSError:
@@ -122,6 +211,10 @@ def _run_summary(run_dir):
 
     return {
         "id": run_dir.name,
+        "name": task_manifest.get("name") or run_dir.name,
+        "template": task_manifest.get("template", ""),
+        "template_name": task_manifest.get("template_name", ""),
+        "resumed_from": task_manifest.get("resumed_from") or "",
         "run_dir": run_dir_display,
         "output_dir": Path(os.path.relpath(output_dir, PROJECT_ROOT)).as_posix(),
         "iterations": iterations,
@@ -140,6 +233,12 @@ _LOG_ITERATION_ERROR_RE = _re.compile(r"Iteration (\d+) error: (.*)")
 _LOG_TOKEN_RE = _re.compile(r"tokens: (\d+) \(prompt: (\d+), completion: (\d+)\)")
 _LOG_METRICS_RE = _re.compile(r"Metrics: (.+)$")
 _LOG_CHECKPOINT_RE = _re.compile(r"Saved checkpoint at iteration (\d+)")
+_LOG_ISLAND_RE = _re.compile(
+    r"Island (\d+): (\d+) programs?, best=(-?[\d.]+), avg=(-?[\d.]+), "
+    r"diversity=([\d.]+), gen=(\d+)"
+)
+_LOG_ISLAND_BEST_RE = _re.compile(r"\(best: ([0-9a-fA-F-]+)\)")
+_LOG_BEST_PROGRAM_RE = _re.compile(r"🌟 New best solution found at iteration (\d+): (\S+)")
 
 
 def _parse_timestamp(line):
@@ -157,6 +256,9 @@ def _parse_log_text(log_text):
     """
     iterations = {}
     checkpoints = []
+    islands = {}
+    migrations = []
+    best_events = []
     started_at = ""
     finished_at = ""
     total_started = None
@@ -234,6 +336,35 @@ def _parse_log_text(log_text):
             checkpoints.append(int(match.group(1)))
             continue
 
+        match = _LOG_ISLAND_RE.search(line)
+        if match:
+            best = _LOG_ISLAND_BEST_RE.search(line)
+            # log_island_status() prints the whole table at once; keep the last.
+            islands[int(match.group(1))] = {
+                "index": int(match.group(1)),
+                "programs": int(match.group(2)),
+                "best_score": float(match.group(3)),
+                "avg_score": float(match.group(4)),
+                "diversity": float(match.group(5)),
+                "generation": int(match.group(6)),
+                "best_program_id": best.group(1) if best else "",
+                "snapshot_at": timestamp,
+            }
+            continue
+
+        match = _LOG_BEST_PROGRAM_RE.search(line)
+        if match:
+            best_events.append(
+                {"iteration": int(match.group(1)), "program_id": match.group(2), "at": timestamp}
+            )
+            continue
+
+        if "Performing migration" in line:
+            migration = _re.search(r"at iteration (\d+)", line)
+            if migration:
+                migrations.append(int(migration.group(1)))
+            continue
+
         if "Starting process-based evolution" in line:
             total = _re.search(r"for (\d+) iterations", line)
             if total:
@@ -250,10 +381,69 @@ def _parse_log_text(log_text):
         "current_iteration": max(iterations) if iterations else 0,
         "total_started": total_started,
         "checkpoints": checkpoints,
+        "islands": [islands[key] for key in sorted(islands)],
+        "migrations": migrations,
+        "best_events": best_events,
         "started_at": started_at,
         "finished_at": finished_at,
         "tokens": token_totals,
     }
+
+
+def _island_metrics(run_dir, log_islands):
+    """Merge log island snapshots with the newest checkpoint's grid population.
+
+    The log only prints island status at checkpoints, so a run that has not
+    checkpointed yet still shows what the manager reported at startup. Once a
+    checkpoint exists, per-island program counts and best ids come from there.
+    """
+    islands = {entry["index"]: dict(entry) for entry in log_islands}
+    checkpoint = _latest_checkpoint_for(str(run_dir / "output")) if (run_dir / "output").is_dir() else None
+    if not checkpoint:
+        return [islands[key] for key in sorted(islands)]
+
+    try:
+        with open(os.path.join(checkpoint, "metadata.json"), "r", encoding="utf-8") as meta_file:
+            meta = json.load(meta_file)
+    except (OSError, json.JSONDecodeError):
+        return [islands[key] for key in sorted(islands)]
+
+    ids_by_island = meta.get("islands") or []
+    best_by_island = meta.get("island_best_programs") or []
+    generations = meta.get("island_generations") or []
+    scores = {}
+    programs_dir = os.path.join(checkpoint, "programs")
+    try:
+        for name in os.listdir(programs_dir):
+            if not name.endswith(".json"):
+                continue
+            with open(os.path.join(programs_dir, name), "r", encoding="utf-8") as program_file:
+                program = json.load(program_file)
+            score = (program.get("metrics") or {}).get("combined_score")
+            if isinstance(score, (int, float)):
+                scores[program.get("id")] = float(score)
+    except OSError:
+        pass
+
+    count = max(len(ids_by_island), len(islands))
+    for index in range(count):
+        entry = islands.setdefault(index, {"index": index})
+        program_ids = ids_by_island[index] if index < len(ids_by_island) else []
+        best_id = best_by_island[index] if index < len(best_by_island) else None
+        entry["programs"] = len(program_ids)
+        entry["program_ids"] = list(program_ids)
+        entry["best_program_id"] = best_id or entry.get("best_program_id", "")
+        entry["generation"] = (
+            generations[index] if index < len(generations) else entry.get("generation", 0)
+        )
+        island_scores = [scores[pid] for pid in program_ids if pid in scores]
+        if island_scores:
+            entry["best_score"] = max(island_scores)
+            entry["avg_score"] = sum(island_scores) / len(island_scores)
+        entry.setdefault("best_score", 0.0)
+        entry.setdefault("avg_score", 0.0)
+        entry.setdefault("diversity", 0.0)
+    return [islands[key] for key in sorted(islands)]
 
 
 def _infer_run_status(log_text, progress, has_checkpoint, log_age_seconds=None):
@@ -335,6 +525,10 @@ def _run_progress(run_dir):
         "iterations": progress["iterations"],
         "tokens": progress["tokens"],
         "checkpoints": progress["checkpoints"],
+        "islands": _island_metrics(run_dir, progress["islands"]),
+        "migrations": progress["migrations"],
+        "best_events": progress["best_events"],
+        "log_tail": log_text.splitlines()[-40:],
         "started_at": progress["started_at"],
         "finished_at": progress["finished_at"],
         "has_checkpoint": checkpoint is not None,
@@ -386,7 +580,14 @@ def load_evolution_data(checkpoint_folder):
     programs_dir = os.path.join(checkpoint_folder, "programs")
     if not os.path.exists(meta_path) or not os.path.exists(programs_dir):
         logger.info(f"Missing metadata.json or programs dir in {checkpoint_folder}")
-        return {"archive": [], "nodes": [], "edges": [], "checkpoint_dir": checkpoint_folder}
+        return {
+            "archive": [],
+            "nodes": [],
+            "edges": [],
+            "checkpoint_dir": checkpoint_folder,
+            "feature_maps": [],
+            "feature_stats": {},
+        }
     with open(meta_path) as f:
         meta = json.load(f)
 
@@ -416,6 +617,8 @@ def load_evolution_data(checkpoint_folder):
                 with open(prog_path) as pf:
                     prog = json.load(pf)
                     sanitize_program_for_visualization(prog)
+                # Embedding vectors are large and never rendered; drop them.
+                prog.pop("embedding", None)
                 prog["id"] = pid
                 prog["island"] = island_idx
                 nodes.append(prog)
@@ -435,7 +638,55 @@ def load_evolution_data(checkpoint_folder):
         "nodes": nodes,
         "edges": edges,
         "checkpoint_dir": checkpoint_folder,
+        "feature_maps": _build_feature_maps(meta, id_to_program),
+        "feature_stats": meta.get("feature_stats", {}) or {},
     }
+
+
+def _build_feature_maps(meta: dict, programs: dict) -> list[dict[str, Any]]:
+    """Turn the saved MAP-Elites grids into per-island cells for the heat map."""
+    stats = meta.get("feature_stats") or {}
+    dimensions = [str(name) for name in stats.keys()] if isinstance(stats, dict) else []
+    if len(dimensions) < 2:
+        default = ["complexity", "diversity"]
+        for name in default:
+            if name not in dimensions:
+                dimensions.append(name)
+
+    feature_maps = []
+    for island_idx, grid in enumerate(meta.get("island_feature_maps", []) or []):
+        cells = []
+        max_x = 0
+        max_y = 0
+        for key, program_id in (grid or {}).items():
+            try:
+                bins = [int(part) for part in str(key).split("-")]
+            except ValueError:
+                continue
+            if len(bins) < 2:
+                continue
+            program = programs.get(program_id) or {}
+            fitness = (program.get("metrics") or {}).get("combined_score")
+            cells.append(
+                {
+                    "x": bins[0],
+                    "y": bins[1],
+                    "program_id": program_id,
+                    "fitness": fitness if check_json_float(fitness) else None,
+                }
+            )
+            max_x = max(max_x, bins[0])
+            max_y = max(max_y, bins[1])
+        feature_maps.append(
+            {
+                "island": island_idx,
+                "dimensions": dimensions[:2],
+                "bins_x": max_x + 1 if cells else 0,
+                "bins_y": max_y + 1 if cells else 0,
+                "cells": cells,
+            }
+        )
+    return feature_maps
 
 
 def sanitize_program_for_visualization(program: dict[str, Any]) -> None:
@@ -510,6 +761,102 @@ def _current_run_status() -> Optional[dict[str, Any]]:
     }
 
 
+def _template_dirs() -> dict[str, Path]:
+    """Map template id -> template directory (any folder holding template.yml)."""
+    if not TEMPLATE_DIR.is_dir():
+        return {}
+    return {
+        path.name: path
+        for path in sorted(TEMPLATE_DIR.iterdir())
+        if (path / "template.yml").is_file()
+    }
+
+
+def _template_summaries() -> list[dict[str, Any]]:
+    """Id/name/description for every template, for the template picker."""
+    import yaml
+
+    summaries = []
+    for template_id, template_dir in _template_dirs().items():
+        name = template_id
+        description = ""
+        try:
+            meta = yaml.safe_load((template_dir / "template.yml").read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            meta = None
+        if isinstance(meta, dict):
+            name = meta.get("name") or template_id
+            description = meta.get("description") or ""
+        summaries.append({"id": template_id, "name": name, "description": description})
+    return summaries
+
+
+def _load_solver_evaluator():
+    """Import solver/evaluator.py by path, so runs share one evaluator."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("solver_evaluator", SOLVER_EVALUATOR_PATH)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载通用评估器：{SOLVER_EVALUATOR_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_template(template_id: Optional[str] = None) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """Read one task template: metadata, objective/validation and editor contents."""
+    import yaml
+
+    template_dirs = _template_dirs()
+    if not template_dirs:
+        return None, f"没有找到任何任务模板：{TEMPLATE_DIR}"
+
+    selected = template_id if template_id in template_dirs else None
+    if selected is None:
+        selected = (
+            DEFAULT_TEMPLATE_ID if DEFAULT_TEMPLATE_ID in template_dirs else sorted(template_dirs)[0]
+        )
+    template_dir = template_dirs[selected]
+
+    try:
+        global_config = yaml.safe_load(GLOBAL_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+        meta = yaml.safe_load((template_dir / "template.yml").read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as error:
+        return None, f"无法读取任务模板 {selected}：{error}"
+    if not isinstance(meta, dict):
+        return None, f"任务模板 {selected} 的 template.yml 必须是键值映射"
+
+    files = meta.get("files") or {}
+    names = {
+        "initial_program": files.get("initial_program") or "init.py",
+        "prompt": files.get("prompt") or "prompt.md",
+        "evaluator": files.get("adapter") or "runner_adapter.py",
+    }
+    contents: dict[str, Any] = {}
+    for key, name in names.items():
+        try:
+            contents[key] = (template_dir / name).read_text(encoding="utf-8")
+        except OSError as error:
+            return None, f"无法读取任务模板 {selected} 的 {name}：{error}"
+
+    defaults = meta.get("defaults") or {}
+    if not isinstance(defaults, dict):
+        return None, f"任务模板 {selected} 的 defaults 必须是键值映射"
+    iterations = defaults.get("iterations")
+    if not isinstance(iterations, int) or isinstance(iterations, bool) or iterations < 1:
+        iterations = global_config.get("max_iterations") if isinstance(global_config, dict) else 10
+
+    return {
+        "id": selected,
+        "name": meta.get("name") or selected,
+        "description": meta.get("description") or "",
+        "objective": meta.get("objective"),
+        "validation": meta.get("validation"),
+        "iterations": iterations,
+        **contents,
+    }, None
+
+
 @app.route("/launch")
 def launch_page():
     if not _is_local_request():
@@ -520,6 +867,9 @@ def launch_page():
         return jsonify({"error": error}), 500
     return render_template(
         "launch.html",
+        templates=defaults["templates"],
+        default_template=defaults["default_template"],
+        template_name=defaults["template"]["name"],
         initial_program=defaults["initial_program"],
         evaluator=defaults["evaluator"],
         prompt=defaults["prompt"],
@@ -527,28 +877,39 @@ def launch_page():
     )
 
 
-def _launch_defaults() -> tuple[Optional[dict[str, Any]], Optional[str]]:
+def _launch_defaults(template_id: Optional[str] = None) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     import yaml
 
-    try:
-        config = yaml.safe_load(GLOBAL_CONFIG_PATH.read_text(encoding="utf-8"))
-        defaults = {
-            "initial_program": (TASK_FILES_DIR / "init.py").read_text(encoding="utf-8"),
-            "evaluator": (TASK_FILES_DIR / "runner_adapter.py").read_text(encoding="utf-8"),
-            "prompt": (TASK_FILES_DIR / "prompt.md").read_text(encoding="utf-8"),
-            "iterations": config["max_iterations"],
-        }
-    except (OSError, yaml.YAMLError, KeyError, TypeError) as error:
-        logger.exception("Could not load evolution launch defaults")
-        return None, f"无法读取新建任务默认配置：{error}"
+    template, error = _load_template(template_id)
+    if error:
+        return None, error
 
     if (
-        not isinstance(defaults["iterations"], int)
-        or isinstance(defaults["iterations"], bool)
-        or defaults["iterations"] < 1
+        not isinstance(template["iterations"], int)
+        or isinstance(template["iterations"], bool)
+        or template["iterations"] < 1
     ):
         return None, "全局配置中的 max_iterations 必须是正整数。"
-    return defaults, None
+
+    # Flat keys keep the legacy launch page and older clients working.
+    payload = {
+        "templates": _template_summaries(),
+        "default_template": template["id"],
+        "template": template,
+    }
+    payload.update(
+        {
+            key: template[key]
+            for key in ("initial_program", "evaluator", "prompt", "iterations", "objective", "validation")
+        }
+    )
+    # 可编辑的 YAML 文本：objective 决定怎么算分，validation 决定候选允许怎么改。
+    for key in ("objective", "validation"):
+        value = template[key]
+        payload[f"{key}_yaml"] = (
+            yaml.safe_dump(value, allow_unicode=True, sort_keys=False) if value else ""
+        )
+    return payload, None
 
 
 @app.route("/api/launch")
@@ -556,10 +917,28 @@ def launch_defaults_api():
     if not _is_local_request():
         abort(403)
 
-    defaults, error = _launch_defaults()
+    defaults, error = _launch_defaults(request.args.get("template"))
     if error:
         return jsonify({"error": error}), 500
     return jsonify(defaults)
+
+
+def _parse_mapping_field(value: Any, field: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """Accept a YAML/JSON string or a mapping for objective/validation overrides."""
+    if value is None:
+        return None, None
+    if isinstance(value, str):
+        import yaml
+
+        try:
+            value = yaml.safe_load(value)
+        except yaml.YAMLError as error:
+            return None, f"{field} 不是合法的 YAML/JSON：{error}"
+    if value == "" or value is None:
+        return None, None
+    if not isinstance(value, dict):
+        return None, f"{field} 必须是键值映射（或 YAML/JSON 文本）。"
+    return value, None
 
 
 @app.route("/api/run", methods=["GET", "POST"])
@@ -583,18 +962,53 @@ def run_api():
     prompt_text = payload.get("prompt")
     evaluator = payload.get("evaluator")
     iterations = payload.get("iterations")
+    template_id = payload.get("template")
+    task_name = payload.get("task_name")
 
     if not isinstance(initial_program, str) or not initial_program.strip():
         return jsonify({"error": "请填写初始程序代码。"}), 400
     if not isinstance(prompt_text, str):
         return jsonify({"error": "任务提示词必须是文本。"}), 400
     if not isinstance(evaluator, str) or not evaluator.strip():
-        return jsonify({"error": "请填写真实训练评估脚本代码。"}), 400
+        return jsonify({"error": "请填写真实评测脚本代码。"}), 400
     if not isinstance(iterations, int) or isinstance(iterations, bool) or iterations < 1:
         return jsonify({"error": "进化轮数必须是正整数。"}), 400
     if not prompt_text.strip():
         return jsonify({"error": "任务提示词不能为空。"}), 400
+    if template_id is not None and (not isinstance(template_id, str) or template_id not in _template_dirs()):
+        return jsonify({"error": f"未知的任务模板：{template_id}"}), 400
+    if task_name is not None and not isinstance(task_name, str):
+        return jsonify({"error": "任务名称必须是文本。"}), 400
+    resume_checkpoint = None
+    if payload.get("resume_from") is not None:
+        resume_from = payload["resume_from"]
+        if not isinstance(resume_from, str) or not resume_from.strip():
+            return jsonify({"error": "续跑来源必须是 <任务ID> 或 <任务ID>/<检查点名>。"}), 400
+        resume_checkpoint = _resolve_resume_checkpoint(resume_from)
+        if resume_checkpoint is None:
+            return jsonify({"error": f"找不到可用于续跑的检查点：{resume_from}"}), 400
     import yaml
+
+    # 目标函数与候选校验：优先用页面提交的值，否则用任务模板里的配置。
+    template, template_error = _load_template(template_id)
+    if template_error:
+        return jsonify({"error": template_error}), 500
+    objective, error = _parse_mapping_field(payload.get("objective"), "评分配置 objective")
+    if error:
+        return jsonify({"error": error}), 400
+    validation, error = _parse_mapping_field(payload.get("validation"), "校验配置 validation")
+    if error:
+        return jsonify({"error": error}), 400
+    if objective is None:
+        objective = template["objective"]
+    if validation is None:
+        validation = template["validation"]
+    try:
+        solver_evaluator = _load_solver_evaluator()
+        solver_evaluator.validate_objective(objective)
+        solver_evaluator.validate_validation(validation)
+    except (ImportError, OSError, ValueError) as error:
+        return jsonify({"error": f"目标/校验配置无效：{error}"}), 400
 
     try:
         config = yaml.safe_load(GLOBAL_CONFIG_PATH.read_text(encoding="utf-8"))
@@ -631,12 +1045,22 @@ def run_api():
         adapter_path = input_dir / "runner_adapter.py"
         config_path = input_dir / "config.yaml"
         prompt_path = input_dir / "prompt.md"
+        task_path = input_dir / "task.json"
+        task_manifest = {
+            "name": (task_name or "").strip() or template["name"],
+            "template": template["id"],
+            "template_name": template["name"],
+            "objective": objective,
+            "validation": validation,
+            "resumed_from": resume_checkpoint,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        }
         try:
             input_dir.mkdir(parents=True, exist_ok=False)
             output_dir.mkdir()
             initial_path.write_text(initial_program, encoding="utf-8")
             evaluator_path.write_text(
-                (TASK_FILES_DIR / "evaluator.py").read_text(encoding="utf-8"),
+                SOLVER_EVALUATOR_PATH.read_text(encoding="utf-8"),
                 encoding="utf-8",
             )
             adapter_path.write_text(evaluator, encoding="utf-8")
@@ -646,8 +1070,16 @@ def run_api():
                 str(adapter_path),
                 "{program_path}",
             ]
+            if objective is not None:
+                evaluator_args["objective"] = objective
+            if validation is not None:
+                evaluator_args["validation"] = validation
+            evaluator_args["reference_program_path"] = str(initial_path)
             config_text = yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
             config_path.write_text(config_text, encoding="utf-8")
+            task_path.write_text(
+                json.dumps(task_manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
         except OSError as error:
             logger.exception("Could not write GUI evolution input files")
             return jsonify({"error": f"无法保存任务输入文件：{error}"}), 500
@@ -663,6 +1095,8 @@ def run_api():
             str(output_dir),
         ]
         command.extend(["--config", str(config_path)])
+        if resume_checkpoint:
+            command.extend(["--checkpoint", resume_checkpoint])
 
         log_path = output_dir / "experiment.log"
         try:
@@ -730,7 +1164,14 @@ def run_detail_api(run_id):
     input_dir = run_dir / "input"
     detail["input_files"] = {
         name: (input_dir / name).is_file()
-        for name in ("init.py", "prompt.md", "runner_adapter.py", "evaluator_callback.py", "config.yaml")
+        for name in (
+            "init.py",
+            "prompt.md",
+            "runner_adapter.py",
+            "evaluator_callback.py",
+            "config.yaml",
+            "task.json",
+        )
     }
     return jsonify({"run": detail})
 
@@ -781,6 +1222,88 @@ def run_progress_api(run_id):
     return jsonify({"run_id": run_id, **_run_progress(run_dir)})
 
 
+@app.route("/api/runs/<run_id>/checkpoints")
+def run_checkpoints_api(run_id):
+    """List the checkpoints of one run so the UI can switch between them."""
+    if not _is_local_request():
+        abort(403)
+    run_dir = _resolve_run_dir(run_id)
+    if run_dir is None:
+        return jsonify({"error": f"找不到任务：{run_id}"}), 404
+    return jsonify({"run_id": run_id, "checkpoints": _list_checkpoints(run_dir)})
+
+
+@app.route("/api/runs/<run_id>/cancel", methods=["POST"])
+def run_cancel_api(run_id):
+    """Terminate a running task started from this service."""
+    if not _is_local_request():
+        abort(403)
+    run_dir = _resolve_run_dir(run_id)
+    if run_dir is None:
+        return jsonify({"error": f"找不到任务：{run_id}"}), 404
+
+    run = current_run
+    if run is None or run.get("id") != run_id:
+        return jsonify({"error": "该任务不是由本服务启动，或已经结束。"}), 409
+
+    process = run["process"]
+    if process.poll() is not None:
+        return jsonify({"error": "该任务已经结束。"}), 409
+
+    try:
+        # The child was started with start_new_session=True, so kill the group.
+        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError) as error:
+        logger.warning("Could not terminate run %s: %s", run_id, error)
+        return jsonify({"error": f"无法终止任务：{error}"}), 500
+
+    run["status"] = "interrupted"
+    logger.info("Cancelled evolution run %s", run_id)
+    return jsonify({"run": _current_run_status()})
+
+
+@app.route("/api/runs/<run_id>/export", methods=["POST"])
+def run_export_api(run_id):
+    """Write a self-contained static copy of the visualization for one run."""
+    import argparse
+
+    if not _is_local_request():
+        abort(403)
+    run_dir = _resolve_run_dir(run_id)
+    if run_dir is None:
+        return jsonify({"error": f"找不到任务：{run_id}"}), 404
+
+    source = str(run_dir / "output")
+    checkpoint_name = ""
+    if request.is_json:
+        payload = request.get_json(silent=True)
+        if isinstance(payload, dict) and isinstance(payload.get("checkpoint"), str):
+            checkpoint_name = payload["checkpoint"].strip()
+    if not checkpoint_name:
+        checkpoint_name = (request.args.get("checkpoint") or "").strip()
+    if checkpoint_name:
+        resolved = _resolve_checkpoint(run_dir, checkpoint_name)
+        if resolved is None:
+            return jsonify({"error": f"找不到检查点：{checkpoint_name}"}), 404
+        source = str(resolved)
+
+    static_dir = run_dir / "static"
+    try:
+        run_static_export(argparse.Namespace(static_output=str(static_dir), path=source))
+    except (OSError, RuntimeError, ValueError) as error:
+        logger.exception("Could not export static visualization")
+        return jsonify({"error": f"静态导出失败：{error}"}), 500
+
+    return jsonify(
+        {
+            "run_id": run_id,
+            "static_dir": str(static_dir),
+            "index": str(static_dir / "index.html"),
+            "checkpoint": Path(source).name if checkpoint_name else "",
+        }
+    )
+
+
 def _resolve_run_output(run_id: str) -> Optional[str]:
     """Map a run id from /api/runs to its output dir, rejecting path traversal."""
     run_dir = _resolve_run_dir(run_id)
@@ -791,24 +1314,42 @@ def _resolve_run_output(run_id: str) -> Optional[str]:
 def data():
     global checkpoint_dir
     run_id = request.args.get("run_id", "").strip()
+    checkpoint_name = request.args.get("checkpoint", "").strip()
+    run_dir = None
     if run_id:
-        base_folder = _resolve_run_output(run_id)
-        if base_folder is None:
+        run_dir = _resolve_run_dir(run_id)
+        if run_dir is None:
             return jsonify({"error": f"找不到任务：{run_id}"}), 404
+        base_folder = str(run_dir / "output")
     else:
         base_folder = (
             current_run["output_dir"]
             if current_run is not None
             else os.environ.get("EVOLVE_OUTPUT", "examples/")
         )
-    checkpoint_dir = find_latest_checkpoint(base_folder)
+
+    selected = None
+    if run_dir is not None and checkpoint_name:
+        selected = _resolve_checkpoint(run_dir, checkpoint_name)
+        if selected is None:
+            return jsonify({"error": f"找不到检查点：{checkpoint_name}"}), 404
+
+    checkpoint_dir = str(selected) if selected is not None else find_latest_checkpoint(base_folder)
     if not checkpoint_dir:
         logger.info(f"No checkpoints found in {base_folder}")
-        return jsonify({"archive": [], "nodes": [], "edges": [], "checkpoint_dir": ""})
+        payload = {"archive": [], "nodes": [], "edges": [], "checkpoint_dir": ""}
+        if run_dir is not None:
+            payload["checkpoints"] = _list_checkpoints(run_dir)
+        return jsonify(payload)
 
     logger.info(f"Loading data from checkpoint: {checkpoint_dir}")
     data = load_evolution_data(checkpoint_dir)
     logger.debug(f"Data: {data}")
+    if run_dir is not None:
+        data["checkpoints"] = _list_checkpoints(run_dir)
+        data["selected_checkpoint"] = (
+            Path(checkpoint_dir).name if str(checkpoint_dir).startswith(str(_checkpoints_root(run_dir))) else ""
+        )
     return jsonify(data)
 
 

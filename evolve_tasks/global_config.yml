@@ -5,7 +5,10 @@ log_level: INFO
 random_seed: 42
 language: python
 
-diff_based_evolution: true
+# Local models such as qwen3.6:35b copy SEARCH blocks imprecisely (full-width
+# punctuation, aligned spaces), so ask for whole-file rewrites instead. The
+# evolve-block enforcement below still keeps everything outside PARAMS intact.
+diff_based_evolution: false
 enforce_evolve_blocks: true
 max_code_length: 20000
 
@@ -34,6 +37,9 @@ evaluator:
   parallel_evaluations: 1
   enable_artifacts: true
   evaluator_args:
-    # runner_command is generated per run from input/runner_adapter.py.
+    # runner_command 由页面按本轮 input/runner_adapter.py 生成；
+    # objective（怎么算分）与 validation（候选允许怎么改）来自选中的任务模板
+    # solver/templates/<模板>/template.yml，也可在页面的高级配置里覆盖；
+    # reference_program_path 指向本轮初始程序，供结构校验比对。
     runner_cwd: null
     timeout_seconds: 3500

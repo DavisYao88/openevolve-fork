@@ -1,0 +1,62 @@
+# 任务模板元数据。solver/ 下的通用评估器按这里的 objective / validation 运行，
+# 模板不自带评估器代码，因此新增任务只需复制目录并改本文件 + 三份输入文件。
+name: 仓店出库量参数调优（famou）
+description: 只搜索生产 LightGBM 训练链路的 PARAMS 取值，按 WMAPE 与 bias_ratio 评分。
+defaults:
+  iterations: 50
+
+files:
+  initial_program: init.py
+  prompt: prompt.md
+  adapter: runner_adapter.py
+
+# 评分：score = -log(wmape) * 100 - max(0, |bias_ratio| - 0.05) * 100
+objective:
+  metrics:
+    - name: wmape
+      direction: minimize
+      transform: log
+      scale: 100
+    - name: bias_ratio
+      direction: minimize
+      threshold: 0.05
+      scale: 100
+
+# 结构校验：只允许改 PARAMS 的值，键集合与初始程序一致，取值受范围约束。
+validation:
+  mode: params_dict
+  variable: PARAMS
+  ranges:
+    n_estimators: {min: 100, max: 2000, type: int}
+    learning_rate: {min: 0.005, max: 0.3, type: float}
+    num_leaves: {min: 4, max: 255, type: int}
+    max_depth: {min: 2, max: 16, type: int}
+    min_child_samples: {min: 5, max: 200, type: int}
+    subsample: {min: 0.5, max: 1.0, type: float}
+    colsample_bytree: {min: 0.3, max: 1.0, type: float}
+    reg_alpha: {min: 0.0, max: 10.0, type: float}
+    reg_lambda: {min: 0.0, max: 10.0, type: float}
+    combo_score_threshold: {min: 0.0, max: 100.0, type: float}
+    min_daily_volume: {min: 50.0, max: 2000.0, type: float}
+    adaptive_volume_floor: {min: 50.0, max: 1000.0, type: float}
+    adaptive_volume_ratio: {min: 0.05, max: 1.0, type: float}
+    variance_calibration_min_rows: {min: 50, max: 500, type: int}
+    bias_correction_clamp_min: {min: 0.30, max: 1.00, type: float}
+    bias_correction_clamp_max: {min: 1.00, max: 2.00, type: float}
+    combo_bias_min_rows_floor: {min: 2, max: 100, type: int}
+    combo_bias_min_rows_ratio: {min: 0.0, max: 0.20, type: float}
+    dirty_date_lag_spread_days: {min: 0, max: 30, type: int}
+    min_history_days: {min: 14, max: 90, type: int}
+  booleans:
+    - enable_combo_scoring
+    - adaptive_volume_threshold
+    - combo_absorb_growth
+    - enable_variance_calibration
+    - exclude_dirty_dates
+    - disable_pipeline_features
+    - disable_fwd_pipeline_features
+  enums:
+    objective: [regression, regression_l1, huber]
+  constraints:
+    lt:
+      - [bias_correction_clamp_min, bias_correction_clamp_max]

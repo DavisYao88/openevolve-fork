@@ -75,6 +75,25 @@ python scripts/visualizer.py --path examples/function_minimization/openevolve_ou
 
 5. **Iteration (`openevolve/iteration.py`)**: Worker process that samples from islands, generates mutations via LLM, evaluates programs, and stores artifacts.
 
+### Public Solver (`solver/`)
+
+The repository wraps OpenEvolve in a task-agnostic solver so new optimization
+tasks need no evaluator code:
+
+- `solver/evaluator.py`: the shared evaluator. Runs `runner_command` (argv list,
+  never shell; `{program_path}` is substituted) whose stdout must be one JSON
+  object of metrics, then turns those metrics into `combined_score` using the
+  `objective` config. Candidate structure is checked with the `validation`
+  config (`mode: none | params_dict`).
+- `solver/templates/<id>/`: one task per folder. `template.yml` declares
+  `objective`, `validation`, default iterations and the input file names; the
+  seed program, prompt and runner adapter sit next to it. The visualizer copies
+  the shared evaluator into each run as `input/evaluator_callback.py` and injects
+  objective/validation into `evaluator.evaluator_args`.
+- `scripts/visualizer.py`: `TEMPLATE_DIR` drives `/api/launch` (template list +
+  contents) and `/api/run` (`template`, `task_name`, optional `objective` /
+  `validation` overrides). Each run also writes `input/task.json`.
+
 ### Key Architectural Patterns
 
 - **Island-Based Evolution**: Multiple populations evolve separately with periodic migration

@@ -1,0 +1,275 @@
+<script setup>
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import { RouterLink, useRoute } from "vue-router";
+import { api } from "../api";
+
+const route = useRoute();
+const runId = computed(() => route.params.id || "");
+
+const detail = ref(null);
+const checkpoints = ref([]);
+const loading = ref(true);
+const error = ref("");
+const actionMessage = ref("");
+const acting = ref(false);
+const logText = ref("");
+const logSize = ref(0);
+const logEof = ref(true);
+let logOffset = 0;
+let detailTimer;
+let logTimer;
+
+const statusLabels = { running: "运行中", completed: "已完成", failed: "失败", interrupted: "已中断", unknown: "未知" };
+const stageLabels = { llm: "模型生成", diff: "差异应用", evaluation: "评测" };
+
+const progress = computed(() => detail.value || {});
+const progressPercent = computed(() => {
+  const value = progress.value;
+  if (!value) return 0;
+  if (Number.isFinite(value.percent)) return value.percent;
+  const total = value.total_iterations || 0;
+  return total ? Math.min(100, ((value.finished_iterations || 0) / total) * 100) : 0;
+});
+const islands = computed(() => progress.value.islands || []);
+const iterations = computed(() => progress.value.iterations || []);
+const lastIteration = computed(() => (iterations.value.length ? iterations.value[iterations.value.length - 1] : null));
+const inputFiles = computed(() => detail.value?.input_files || {});
+const isRunning = computed(() => progress.value.status === "running");
+const bestScore = computed(() => detail.value?.best_metrics?.combined_score ?? null);
+const resumedFrom = computed(() => detail.value?.resumed_from || "");
+
+async function loadDetail() {
+  try {
+    error.value = "";
+    const response = await api.runDetail(runId.value);
+    detail.value = response.run || null;
+  } catch (cause) {
+    error.value = cause.message;
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function loadCheckpoints() {
+  try {
+    checkpoints.value = (await api.runCheckpoints(runId.value)).checkpoints || [];
+  } catch {
+    checkpoints.value = [];
+  }
+}
+
+async function loadLog() {
+  if (!runId.value) return;
+  try {
+    const response = await api.runLog(runId.value, logOffset);
+    logText.value = logOffset === 0 ? response.log : logText.value + response.log;
+    logOffset = response.offset;
+    logSize.value = response.size;
+    logEof.value = response.eof;
+  } catch (cause) {
+    error.value = cause.message;
+  }
+}
+
+async function cancelRun() {
+  acting.value = true;
+  actionMessage.value = "";
+  try {
+    await api.cancelRun(runId.value);
+    actionMessage.value = "已发送终止信号，任务会被标记为已中断。";
+    await loadDetail();
+  } catch (cause) {
+    actionMessage.value = cause.message;
+  } finally {
+    acting.value = false;
+  }
+}
+
+async function exportRun() {
+  acting.value = true;
+  actionMessage.value = "";
+  try {
+    const response = await api.exportRun(runId.value);
+    actionMessage.value = `静态页面已生成：${response.index}（需用 HTTP 服务打开，例如 python3 -m http.server --directory ${response.static_dir} 8080）`;
+  } catch (cause) {
+    actionMessage.value = cause.message;
+  } finally {
+    acting.value = false;
+  }
+}
+
+function openCheckpoint(name) {
+  return { path: "/", query: { run_id: runId.value, checkpoint: name } };
+}
+
+onMounted(() => {
+  loadDetail();
+  loadCheckpoints();
+  loadLog();
+  detailTimer = window.setInterval(loadDetail, 5000);
+  logTimer = window.setInterval(() => { if (isRunning.value || !logEof.value) loadLog(); }, 3000);
+});
+onUnmounted(() => {
+  window.clearInterval(detailTimer);
+  window.clearInterval(logTimer);
+});
+</script>
+
+<template>
+  <section>
+    <div class="page-heading">
+      <div>
+        <p class="eyebrow">Run Detail</p>
+        <h1>{{ detail?.name || runId }}</h1>
+        <p class="mono">{{ runId }}</p>
+      </div>
+      <div class="detail-actions">
+        <button class="button" :disabled="acting || !isRunning" @click="cancelRun">■ 停止运行</button>
+        <button class="button" :disabled="acting" @click="exportRun">⤓ 静态导出</button>
+        <RouterLink class="button primary" :to="{ path: '/', query: { run_id: runId } }">查看可视化</RouterLink>
+      </div>
+    </div>
+
+    <p v-if="error" class="message error">{{ error }}</p>
+    <p v-else-if="actionMessage" class="message">{{ actionMessage }}</p>
+    <div v-if="loading" class="card empty-state">正在读取任务详情…</div>
+
+    <template v-else-if="detail">
+      <section class="card run-progress">
+        <div class="progress-head">
+          <div>
+            <p class="eyebrow">Progress</p>
+            <h2>运行状态</h2>
+          </div>
+          <span class="status-badge" :class="detail.status">{{ statusLabels[detail.status] || detail.status }}</span>
+        </div>
+        <div class="progress-bar-track" role="progressbar" :aria-valuenow="progressPercent" aria-valuemin="0" aria-valuemax="100">
+          <div class="progress-bar-fill" :class="detail.status" :style="{ width: `${progressPercent}%` }"></div>
+        </div>
+        <div class="progress-stats">
+          <div><small>进度</small><strong>{{ detail.finished_iterations ?? 0 }} / {{ detail.total_iterations ?? detail.iterations ?? 0 }}</strong></div>
+          <div><small>成功</small><strong>{{ detail.completed_iterations ?? 0 }}</strong></div>
+          <div><small>失败</small><strong>{{ detail.failed_iterations ?? 0 }}</strong></div>
+          <div><small>程序数</small><strong>{{ detail.programs ?? 0 }}</strong></div>
+          <div><small>最高分</small><strong>{{ bestScore === null ? "—" : Number(bestScore).toFixed(4) }}</strong></div>
+          <div><small>token</small><strong>{{ detail.tokens?.prompt || 0 }} / {{ detail.tokens?.completion || 0 }}</strong></div>
+        </div>
+        <p v-if="lastIteration" class="progress-last">
+          最近一轮：第 {{ lastIteration.iteration }} 轮 ·
+          <b>{{ lastIteration.status === "completed" ? "成功" : "失败" }}</b>
+          <template v-if="lastIteration.stage"> · 阶段 {{ stageLabels[lastIteration.stage] || lastIteration.stage }}</template>
+          <template v-if="lastIteration.error"> · {{ lastIteration.error }}</template>
+        </p>
+
+        <div v-if="islands.length" class="island-grid">
+          <article v-for="island in islands" :key="island.index" class="island-card">
+            <header><strong>岛屿 {{ island.index }}</strong><span>第 {{ island.generation }} 代</span></header>
+            <div class="island-stats">
+              <div><small>程序</small><b>{{ island.programs }}</b></div>
+              <div><small>最高分</small><b>{{ Number(island.best_score).toFixed(4) }}</b></div>
+              <div><small>平均分</small><b>{{ Number(island.avg_score).toFixed(4) }}</b></div>
+              <div><small>多样性</small><b>{{ Number(island.diversity).toFixed(2) }}</b></div>
+            </div>
+            <p v-if="island.best_program_id" class="island-best">最优 <code>{{ island.best_program_id }}</code></p>
+          </article>
+        </div>
+      </section>
+
+      <div class="detail-grid">
+        <section class="card">
+          <h2 class="card-title">任务信息</h2>
+          <dl class="info-list">
+            <div><dt>模板</dt><dd>{{ detail.template_name || "—" }}</dd></div>
+            <div><dt>模型</dt><dd class="mono">{{ detail.model || "—" }}</dd></div>
+            <div><dt>计划轮数</dt><dd>{{ detail.iterations || "—" }}</dd></div>
+            <div><dt>输出目录</dt><dd class="mono">{{ detail.output_dir || "—" }}</dd></div>
+            <div><dt>续跑来源</dt><dd class="mono">{{ resumedFrom || "—" }}</dd></div>
+            <div><dt>更新时间</dt><dd>{{ detail.updated_at || "—" }}</dd></div>
+          </dl>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">检查点</h2>
+          <p v-if="!checkpoints.length" class="empty-hint">还没有检查点。检查点按固定轮次间隔保存。</p>
+          <ul v-else class="checkpoint-list">
+            <li v-for="item in checkpoints" :key="item.name">
+              <div>
+                <strong class="mono">{{ item.name }}</strong>
+                <small>{{ item.programs }} 个程序 · {{ item.updated_at }}</small>
+              </div>
+              <RouterLink class="button" :to="openCheckpoint(item.name)">查看</RouterLink>
+            </li>
+          </ul>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">输入文件</h2>
+          <ul class="file-list">
+            <li v-for="(exists, name) in inputFiles" :key="name">
+              <span class="mono">{{ name }}</span>
+              <span class="file-state" :class="exists ? 'ok' : 'missing'">{{ exists ? "已保存" : "缺失" }}</span>
+            </li>
+          </ul>
+        </section>
+      </div>
+
+      <section class="card log-card">
+        <h2 class="card-title">运行日志<span class="log-size">{{ (logSize / 1024).toFixed(1) }} KB</span></h2>
+        <pre ref="logPanel" class="log-view">{{ logText || "暂无日志" }}</pre>
+      </section>
+    </template>
+  </section>
+</template>
+
+<style scoped>
+.detail-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.run-progress { padding:16px 18px; margin-bottom:16px; }
+.card-title { margin:0 0 12px; font-size:14px; }
+.progress-head { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+.progress-head h2 { margin:2px 0 0; font-size:14px; }
+.status-badge { padding:5px 10px; border-radius:100px; background:#eef1f5; color:#68748a; font-size:10px; font-weight:700; }
+.status-badge.completed { background:#e7f7ef; color:#178454; }
+.status-badge.running { background:#e8efff; color:#315fce; }
+.status-badge.failed { background:#fff0f0; color:#c14242; }
+.status-badge.interrupted { background:#fff5dd; color:#946407; }
+.progress-bar-track { height:8px; margin:14px 0; overflow:hidden; border-radius:100px; background:#eef1f6; }
+.progress-bar-fill { height:100%; border-radius:100px; background:#315fce; transition:width .3s ease; }
+.progress-bar-fill.failed { background:#c14242; }
+.progress-bar-fill.interrupted { background:#c99a25; }
+.progress-bar-fill.completed { background:#178454; }
+.progress-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:10px; }
+.progress-stats > div { display:flex; flex-direction:column; gap:4px; }
+.progress-stats small, .info-list dt, .island-stats small { color:var(--muted); font-size:10px; }
+.progress-stats strong { font-size:12px; overflow-wrap:anywhere; }
+.progress-last { margin:12px 0 0; color:#57647a; font-size:11px; overflow-wrap:anywhere; }
+.island-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; margin-top:14px; }
+.island-card { padding:12px; border:1px solid var(--line); border-radius:10px; background:#fafbfe; }
+.island-card header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+.island-card header strong { font-size:12px; }
+.island-card header span { color:var(--muted); font-size:10px; }
+.island-stats { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-top:10px; }
+.island-stats > div { display:flex; flex-direction:column; gap:2px; }
+.island-stats b { font-size:12px; }
+.island-best { margin:10px 0 0; color:var(--muted); font-size:10px; overflow-wrap:anywhere; }
+.island-best code { font-size:10px; }
+.detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
+.info-list { margin:0; }
+.info-list > div { display:flex; flex-direction:column; gap:4px; padding:7px 0; border-bottom:1px solid #f0f2f6; }
+.info-list > div:last-child { border-bottom:0; }
+.info-list dt { font-weight:600; }
+.info-list dd { margin:0; font-size:12px; overflow-wrap:anywhere; }
+.checkpoint-list, .file-list { margin:0; padding:0; list-style:none; }
+.checkpoint-list li { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid #f0f2f6; }
+.checkpoint-list li:last-child { border-bottom:0; }
+.checkpoint-list strong { font-size:11px; }
+.checkpoint-list small { display:block; margin-top:3px; color:var(--muted); font-size:10px; }
+.file-list li { display:flex; align-items:center; justify-content:space-between; padding:7px 0; border-bottom:1px solid #f0f2f6; font-size:11px; }
+.file-list li:last-child { border-bottom:0; }
+.file-state { padding:3px 7px; border-radius:100px; font-size:10px; font-weight:700; }
+.file-state.ok { background:#e7f7ef; color:#178454; }
+.file-state.missing { background:#fff0f0; color:#c14242; }
+.log-card { margin-top:16px; }
+.log-size { margin-left:8px; color:var(--muted); font-weight:400; font-size:11px; }
+.log-view { max-height:52vh; margin:0; overflow:auto; padding:12px; border-radius:8px; background:#172033; color:#d7e0f1; font:10px/1.5 "IBM Plex Mono",monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+.empty-hint { margin:0; color:var(--muted); font-size:11px; }
+</style>
