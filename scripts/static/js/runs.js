@@ -1,5 +1,3 @@
-const RUN_STORAGE_KEY = "openevolve.selectedRunId";
-
 const STATUS_LABELS = {
   running: "运行中",
   completed: "已完成",
@@ -78,5 +76,3 @@ async function loadRuns() {
 
 refreshButton.addEventListener("click", loadRuns);
 loadRuns();
-
-export { RUN_STORAGE_KEY };

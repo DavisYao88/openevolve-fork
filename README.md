@@ -922,6 +922,10 @@ python scripts/visualizer.py --path examples/function_minimization/openevolve_ou
 
 打开 `http://127.0.0.1:8080/launch` 可在浏览器中配置并启动任务。页面只提供提示词、初始程序、评估器代码和进化轮数四项输入，不提供文件导入，也不显示运行 YAML。默认内容从 `famou/调参/` 读取；隐藏的全局运行配置为 `evolve_tasks/global_config.yml`。启动时服务把表单代码复制到本次任务目录，并自动生成指向本轮 `input/runner_adapter.py` 的 `evaluator.evaluator_args.runner_command`；提示词模板指向本轮 `input/prompt.md`。页面不会改写 `famou/调参/` 下的源文件；本轮输入副本、生成的运行配置和输出均保存在 `evolve_tasks/evolve_task_<时间戳>/input` 与 `output`。页面中的评测器代码需实现真实训练适配器；该页面会在本机执行 Python 代码，仅应在可信机器上使用。OpenEvolve 的 checkpoint 保存在任务 `output/checkpoints/` 下，控制台日志保存在 `output/experiment.log`。
 
+### Standalone Vue 3 frontend
+
+The standalone Vue app in `frontend/` replaces the visualizer, manual-feedback, launch, and run-list pages while reusing the Flask APIs for all backend operations. Start Flask with `python scripts/visualizer.py --host 127.0.0.1 --port 8080`, then in another terminal run `cd frontend && npm install && npm run dev`. Open the Vite URL (normally `http://127.0.0.1:5173`). See [frontend/README.md](frontend/README.md) for the API proxy and production hosting notes.
+
 **Features:**
 
 - 🌳 **Evolution tree** with parent-child relationships

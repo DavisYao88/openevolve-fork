@@ -188,6 +188,126 @@ class TestVisualizerRunsList(unittest.TestCase):
         self.assertIn(b"newer", response.data)
         self.assertIn(b"evolve_task_20261023130000", response.data)
 
+    def _write_log(self, run_id, lines):
+        log_path = self.runs_root / run_id / "output" / "experiment.log"
+        log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def test_progress_parses_running_iterations(self):
+        self._make_run("evolve_task_20261023120000", iterations=50)
+        self._write_log(
+            "evolve_task_20261023120000",
+            [
+                "2026-10-23 18:30:46,323 - INFO - Logging to logs/openevolve.log",
+                "2026-10-23 18:30:46,410 - INFO - Starting process-based evolution "
+                "from iteration 1 for 50 iterations (total: 51)",
+                "2026-10-23 18:32:28,306 - WARNING - Iteration 1 error: None of the 1 "
+                "SEARCH block(s) matched the parent program | tokens: 8187 "
+                "(prompt: 3757, completion: 4430)",
+                "2026-10-23 18:33:40,001 - INFO - Iteration 2: Program child-2 "
+                "(parent: seed) completed in 71.50s | tokens: 9000 (prompt: 4000, "
+                "completion: 5000)",
+                "2026-10-23 18:33:40,002 - INFO - Metrics: combined_score=12.5000",
+            ],
+        )
+
+        payload = self.client.get("/api/runs/evolve_task_20261023120000/progress").get_json()
+
+        self.assertEqual(payload["status"], "running")
+        self.assertEqual(payload["total_iterations"], 50)
+        self.assertEqual(payload["finished_iterations"], 2)
+        self.assertEqual(payload["completed_iterations"], 1)
+        self.assertEqual(payload["failed_iterations"], 1)
+        self.assertEqual(payload["current_iteration"], 2)
+        self.assertEqual(payload["percent"], 4.0)
+        self.assertEqual(payload["tokens"], {"prompt": 7757, "completion": 9430})
+
+        first, second = payload["iterations"]
+        self.assertEqual(first["status"], "failed")
+        self.assertEqual(first["stage"], "diff")
+        self.assertEqual(first["tokens"]["total"], 8187)
+        self.assertEqual(second["status"], "completed")
+        self.assertEqual(second["program_id"], "child-2")
+        self.assertEqual(second["duration_seconds"], 71.5)
+        self.assertEqual(second["metrics_text"], "combined_score=12.5000")
+
+    def test_progress_reports_completed_and_interrupted(self):
+        self._make_run("evolve_task_20261023120000", iterations=10)
+        self._write_log(
+            "evolve_task_20261023120000",
+            [
+                "2026-10-23 18:30:46,410 - INFO - Starting process-based evolution "
+                "from iteration 1 for 10 iterations (total: 11)",
+                "2026-10-23 18:31:00,000 - INFO - Saved checkpoint at iteration 10",
+                "2026-10-23 18:31:01,000 - INFO - ✅ Evolution completed - "
+                "Maximum iterations reached",
+                "Evolution complete!",
+            ],
+        )
+        completed = self.client.get("/api/runs/evolve_task_20261023120000/progress").get_json()
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(completed["checkpoints"], [10])
+
+        self._make_run("evolve_task_20261023130000", iterations=10)
+        self._write_log(
+            "evolve_task_20261023130000",
+            [
+                "2026-10-23 18:30:46,410 - INFO - Starting process-based evolution "
+                "from iteration 1 for 10 iterations (total: 11)",
+                "2026-10-23 18:31:01,000 - INFO - ✅ Evolution completed - "
+                "Shutdown requested",
+            ],
+        )
+        interrupted = self.client.get(
+            "/api/runs/evolve_task_20261023130000/progress"
+        ).get_json()
+        self.assertEqual(interrupted["status"], "interrupted")
+
+    def test_run_details_expose_iterations_and_input_files(self):
+        self._make_run("evolve_task_20261023120000", iterations=10)
+        self._write_log(
+            "evolve_task_20261023120000",
+            [
+                "2026-10-23 18:30:46,410 - INFO - Starting process-based evolution "
+                "from iteration 1 for 10 iterations (total: 11)",
+                "2026-10-23 18:32:28,306 - WARNING - Iteration 1 error: LLM generation "
+                "failed: boom",
+            ],
+        )
+
+        response = self.client.get("/api/runs/evolve_task_20261023120000")
+
+        self.assertEqual(response.status_code, 200)
+        run = response.get_json()["run"]
+        self.assertEqual(run["id"], "evolve_task_20261023120000")
+        self.assertEqual(run["status"], "running")
+        self.assertEqual(run["iterations"][0]["stage"], "llm")
+        self.assertTrue(run["has_checkpoint"])
+        self.assertTrue(run["input_files"]["config.yaml"])
+        self.assertFalse(run["input_files"]["prompt.md"])
+
+    def test_run_log_endpoint_supports_offsets(self):
+        self._make_run("evolve_task_20261023120000")
+        self._write_log(
+            "evolve_task_20261023120000",
+            ["2026-10-23 18:30:46,323 - INFO - first", "2026-10-23 18:30:47,323 - INFO - second"],
+        )
+
+        full = self.client.get("/api/runs/evolve_task_20261023120000/log").get_json()
+        self.assertTrue(full["eof"])
+        self.assertIn("first", full["log"])
+        self.assertIn("second", full["log"])
+
+        tail = self.client.get(
+            f"/api/runs/evolve_task_20261023120000/log?offset={full['size'] - 40}"
+        ).get_json()
+        self.assertEqual(tail["offset"], full["size"])
+        self.assertIn("second", tail["log"])
+        self.assertNotIn("first", tail["log"])
+
+    def test_detail_endpoints_reject_unknown_runs(self):
+        for path in ("/api/runs/missing", "/api/runs/missing/log", "/api/runs/missing/progress"):
+            self.assertEqual(self.client.get(path).status_code, 404, path)
+
 
 if __name__ == "__main__":
     unittest.main()

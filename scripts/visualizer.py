@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GUI_RUNS_DIR = PROJECT_ROOT / "evolve_tasks"
 TASK_FILES_DIR = PROJECT_ROOT / "famou" / "调参"
 GLOBAL_CONFIG_PATH = GUI_RUNS_DIR / "global_config.yml"
+# A run whose log has not grown for this long is treated as interrupted rather
+# than running, so a killed process does not look alive forever.
+STALE_RUN_SECONDS = 15 * 60
 current_run: Optional[dict[str, Any]] = None
 run_lock = threading.Lock()
 
@@ -71,36 +75,28 @@ def _run_summary(run_dir):
     """Describe one evolve_tasks/evolve_task_* run folder for the task list."""
     output_dir = run_dir / "output"
     input_dir = run_dir / "input"
-    checkpoint = _latest_checkpoint_for(str(output_dir)) if output_dir.is_dir() else None
-
-    status = "unknown"
-    return_code = None
-    log_text = ""
-    log_path = output_dir / "experiment.log"
-    try:
-        with open(log_path, "r", encoding="utf-8", errors="replace") as log_file:
-            log_text = log_file.read()
-    except OSError:
-        pass
-    if "Evolution complete!" in log_text or "✅ Evolution completed" in log_text:
-        status = "completed"
-        return_code = 0
-    elif log_text:
-        status = "failed"
-    elif checkpoint:
-        status = "interrupted"
 
     iterations = 0
+    model = ""
     config_path = input_dir / "config.yaml"
     if config_path.is_file():
         try:
             import yaml
 
             config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-            if isinstance(config, dict) and isinstance(config.get("max_iterations"), int):
-                iterations = config["max_iterations"]
         except (OSError, yaml.YAMLError):
-            pass
+            config = None
+        if isinstance(config, dict):
+            if isinstance(config.get("max_iterations"), int):
+                iterations = config["max_iterations"]
+            llm = config.get("llm")
+            if isinstance(llm, dict):
+                if isinstance(llm.get("primary_model"), str):
+                    model = llm["primary_model"]
+                elif isinstance(llm.get("models"), list) and llm["models"]:
+                    first = llm["models"][0]
+                    if isinstance(first, dict) and isinstance(first.get("name"), str):
+                        model = first["name"]
 
     best_metrics = {}
     best_info = output_dir / "best" / "best_program_info.json"
@@ -111,23 +107,6 @@ def _run_summary(run_dir):
             if isinstance(info, dict) and isinstance(info.get("metrics"), dict):
                 best_metrics = info["metrics"]
         except (OSError, json.JSONDecodeError):
-            pass
-
-    model = ""
-    if config_path.is_file():
-        try:
-            import yaml
-
-            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-            llm = config.get("llm") if isinstance(config, dict) else None
-            if isinstance(llm, dict):
-                if isinstance(llm.get("primary_model"), str):
-                    model = llm["primary_model"]
-                elif isinstance(llm.get("models"), list) and llm["models"]:
-                    first = llm["models"][0]
-                    if isinstance(first, dict) and isinstance(first.get("name"), str):
-                        model = first["name"]
-        except (OSError, yaml.YAMLError):
             pass
 
     try:
@@ -145,17 +124,223 @@ def _run_summary(run_dir):
         "id": run_dir.name,
         "run_dir": run_dir_display,
         "output_dir": Path(os.path.relpath(output_dir, PROJECT_ROOT)).as_posix(),
-        "status": status,
-        "return_code": return_code,
         "iterations": iterations,
         "programs": _read_run_generation(run_dir),
         "best_metrics": best_metrics,
         "model": model,
+        "updated_at": updated_at,
+    }
+
+
+_LOG_TIMESTAMP_RE = _re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})")
+_LOG_ITERATION_DONE_RE = _re.compile(
+    r"Iteration (\d+): Program (\S+) \(parent: (\S+)\) completed in ([\d.]+)s"
+)
+_LOG_ITERATION_ERROR_RE = _re.compile(r"Iteration (\d+) error: (.*)")
+_LOG_TOKEN_RE = _re.compile(r"tokens: (\d+) \(prompt: (\d+), completion: (\d+)\)")
+_LOG_METRICS_RE = _re.compile(r"Metrics: (.+)$")
+_LOG_CHECKPOINT_RE = _re.compile(r"Saved checkpoint at iteration (\d+)")
+
+
+def _parse_timestamp(line):
+    match = _LOG_TIMESTAMP_RE.match(line)
+    if not match:
+        return ""
+    return match.group(1).replace(",", ".")
+
+
+def _parse_log_text(log_text):
+    """Extract per-iteration progress from an experiment.log.
+
+    The log mixes lines from the main process and from worker processes, so the
+    result is ordered by iteration number rather than by file order.
+    """
+    iterations = {}
+    checkpoints = []
+    started_at = ""
+    finished_at = ""
+    total_started = None
+    token_totals = {"prompt": 0, "completion": 0}
+    for line in log_text.splitlines():
+        timestamp = _parse_timestamp(line)
+        if timestamp:
+            if not started_at:
+                started_at = timestamp
+            finished_at = timestamp
+
+        match = _LOG_ITERATION_DONE_RE.search(line)
+        if match:
+            iteration = int(match.group(1))
+            entry = iterations.setdefault(iteration, {})
+            entry.update(
+                {
+                    "iteration": iteration,
+                    "status": "completed",
+                    "program_id": match.group(2),
+                    "parent_id": match.group(3),
+                    "duration_seconds": float(match.group(4)),
+                    "finished_at": timestamp,
+                }
+            )
+            tokens = _LOG_TOKEN_RE.search(line)
+            if tokens:
+                entry["tokens"] = {
+                    "total": int(tokens.group(1)),
+                    "prompt": int(tokens.group(2)),
+                    "completion": int(tokens.group(3)),
+                }
+                token_totals["prompt"] += int(tokens.group(2))
+                token_totals["completion"] += int(tokens.group(3))
+            continue
+
+        match = _LOG_ITERATION_ERROR_RE.search(line)
+        if match:
+            iteration = int(match.group(1))
+            message = match.group(2).strip()
+            tokens = _LOG_TOKEN_RE.search(message)
+            entry = iterations.setdefault(iteration, {})
+            entry.update(
+                {
+                    "iteration": iteration,
+                    "status": "failed",
+                    "error": _LOG_TOKEN_RE.sub("", message).strip(),
+                    "finished_at": timestamp,
+                }
+            )
+            if tokens:
+                entry["tokens"] = {
+                    "total": int(tokens.group(1)),
+                    "prompt": int(tokens.group(2)),
+                    "completion": int(tokens.group(3)),
+                }
+                token_totals["prompt"] += int(tokens.group(2))
+                token_totals["completion"] += int(tokens.group(3))
+            if "LLM generation failed" in message:
+                entry["stage"] = "llm"
+            elif "SEARCH block" in message:
+                entry["stage"] = "diff"
+            elif "evaluat" in message.lower():
+                entry["stage"] = "evaluation"
+            continue
+
+        match = _LOG_METRICS_RE.search(line)
+        if match and iterations:
+            latest = iterations[max(iterations)]
+            latest["metrics_text"] = match.group(1).strip()
+            continue
+
+        match = _LOG_CHECKPOINT_RE.search(line)
+        if match:
+            checkpoints.append(int(match.group(1)))
+            continue
+
+        if "Starting process-based evolution" in line:
+            total = _re.search(r"for (\d+) iterations", line)
+            if total:
+                total_started = int(total.group(1))
+        elif "Evolution complete!" in line or "✅ Evolution completed" in line:
+            pass
+
+    completed = sum(1 for entry in iterations.values() if entry.get("status") == "completed")
+    failed = sum(1 for entry in iterations.values() if entry.get("status") == "failed")
+    return {
+        "iterations": [iterations[key] for key in sorted(iterations)],
+        "completed_iterations": completed,
+        "failed_iterations": failed,
+        "current_iteration": max(iterations) if iterations else 0,
+        "total_started": total_started,
+        "checkpoints": checkpoints,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "tokens": token_totals,
+    }
+
+
+def _infer_run_status(log_text, progress, has_checkpoint, log_age_seconds=None):
+    """Classify a run from its log, falling back to on-disk artifacts."""
+    # A user-requested shutdown also prints the "✅ Evolution completed" banner,
+    # so check for it before the success markers.
+    if "Shutdown requested" in log_text or "KeyboardInterrupt" in log_text:
+        return "interrupted"
+    if "Evolution complete!" in log_text or "✅ Evolution completed" in log_text:
+        return "completed"
+    if not log_text:
+        return "interrupted" if has_checkpoint else "pending"
+    if not progress.get("iterations"):
+        # The log exists but no iteration ever reported: startup failed.
+        return "failed"
+    total = progress.get("total_started")
+    last = progress.get("current_iteration") or 0
+    if total and last >= total:
+        # Every round reported, but the completion banner never appeared.
+        return "interrupted"
+    if log_age_seconds is not None and log_age_seconds > STALE_RUN_SECONDS:
+        # No log activity for a long time: the process is gone, not running.
+        return "interrupted"
+    return "running"
+
+
+def _read_log_text(log_path, max_bytes=2 * 1024 * 1024):
+    """Read the tail of a log file without loading huge files whole."""
+    try:
+        size = os.path.getsize(log_path)
+        with open(log_path, "rb") as log_file:
+            if size > max_bytes:
+                log_file.seek(size - max_bytes)
+                log_file.readline()  # drop the partial first line
+            return log_file.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _run_progress(run_dir):
+    """Live progress for one run, derived from experiment.log plus checkpoints."""
+    output_dir = run_dir / "output"
+    log_text = _read_log_text(output_dir / "experiment.log")
+    progress = _parse_log_text(log_text)
+    checkpoint = _latest_checkpoint_for(str(output_dir)) if output_dir.is_dir() else None
+
+    iterations = 0
+    config_path = run_dir / "input" / "config.yaml"
+    if config_path.is_file():
+        try:
+            import yaml
+
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            if isinstance(config, dict) and isinstance(config.get("max_iterations"), int):
+                iterations = config["max_iterations"]
+        except (OSError, yaml.YAMLError):
+            pass
+
+    total = iterations or progress.get("total_started") or 0
+    finished = progress["completed_iterations"] + progress["failed_iterations"]
+
+    log_age_seconds = None
+    try:
+        log_age_seconds = max(0.0, time.time() - os.path.getmtime(output_dir / "experiment.log"))
+    except OSError:
+        pass
+
+    status = _infer_run_status(
+        log_text, progress, checkpoint is not None, log_age_seconds=log_age_seconds
+    )
+    return {
+        "status": status,
+        "total_iterations": total,
+        "current_iteration": progress["current_iteration"],
+        "finished_iterations": finished,
+        "completed_iterations": progress["completed_iterations"],
+        "failed_iterations": progress["failed_iterations"],
+        "percent": round(100.0 * finished / total, 1) if total else 0.0,
+        "iterations": progress["iterations"],
+        "tokens": progress["tokens"],
+        "checkpoints": progress["checkpoints"],
+        "started_at": progress["started_at"],
+        "finished_at": progress["finished_at"],
         "has_checkpoint": checkpoint is not None,
         "checkpoint_dir": (
             Path(os.path.relpath(checkpoint, PROJECT_ROOT)).as_posix() if checkpoint else ""
         ),
-        "updated_at": updated_at,
     }
 
 
@@ -163,13 +348,37 @@ def _list_runs():
     """List every GUI-launched evolution run, newest first."""
     if not GUI_RUNS_DIR.is_dir():
         return []
-    runs = [
-        _run_summary(path)
-        for path in GUI_RUNS_DIR.iterdir()
-        if path.is_dir() and path.name.startswith("evolve_task_")
-    ]
+    runs = []
+    for path in GUI_RUNS_DIR.iterdir():
+        if not path.is_dir() or not path.name.startswith("evolve_task_"):
+            continue
+        summary = _run_summary(path)
+        progress = _run_progress(path)
+        summary.update(
+            {
+                "status": progress["status"],
+                "total_iterations": progress["total_iterations"],
+                "finished_iterations": progress["finished_iterations"],
+                "completed_iterations": progress["completed_iterations"],
+                "failed_iterations": progress["failed_iterations"],
+                "percent": progress["percent"],
+                "current_iteration": progress["current_iteration"],
+                "last_error": next(
+                    (
+                        entry.get("error", "")
+                        for entry in reversed(progress["iterations"])
+                        if entry.get("status") == "failed"
+                    ),
+                    "",
+                ),
+                "has_checkpoint": progress["has_checkpoint"],
+                "checkpoint_dir": progress["checkpoint_dir"],
+            }
+        )
+        runs.append(summary)
     runs.sort(key=lambda run: run["updated_at"], reverse=True)
     return runs
+
 
 
 def load_evolution_data(checkpoint_folder):
@@ -306,16 +515,51 @@ def launch_page():
     if not _is_local_request():
         abort(403)
 
-    import yaml
-
-    config = yaml.safe_load(GLOBAL_CONFIG_PATH.read_text(encoding="utf-8"))
+    defaults, error = _launch_defaults()
+    if error:
+        return jsonify({"error": error}), 500
     return render_template(
         "launch.html",
-        initial_program=(TASK_FILES_DIR / "init.py").read_text(encoding="utf-8"),
-        evaluator=(TASK_FILES_DIR / "runner_adapter.py").read_text(encoding="utf-8"),
-        prompt=(TASK_FILES_DIR / "prompt.md").read_text(encoding="utf-8"),
-        iterations=config["max_iterations"],
+        initial_program=defaults["initial_program"],
+        evaluator=defaults["evaluator"],
+        prompt=defaults["prompt"],
+        iterations=defaults["iterations"],
     )
+
+
+def _launch_defaults() -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    import yaml
+
+    try:
+        config = yaml.safe_load(GLOBAL_CONFIG_PATH.read_text(encoding="utf-8"))
+        defaults = {
+            "initial_program": (TASK_FILES_DIR / "init.py").read_text(encoding="utf-8"),
+            "evaluator": (TASK_FILES_DIR / "runner_adapter.py").read_text(encoding="utf-8"),
+            "prompt": (TASK_FILES_DIR / "prompt.md").read_text(encoding="utf-8"),
+            "iterations": config["max_iterations"],
+        }
+    except (OSError, yaml.YAMLError, KeyError, TypeError) as error:
+        logger.exception("Could not load evolution launch defaults")
+        return None, f"无法读取新建任务默认配置：{error}"
+
+    if (
+        not isinstance(defaults["iterations"], int)
+        or isinstance(defaults["iterations"], bool)
+        or defaults["iterations"] < 1
+    ):
+        return None, "全局配置中的 max_iterations 必须是正整数。"
+    return defaults, None
+
+
+@app.route("/api/launch")
+def launch_defaults_api():
+    if not _is_local_request():
+        abort(403)
+
+    defaults, error = _launch_defaults()
+    if error:
+        return jsonify({"error": error}), 500
+    return jsonify(defaults)
 
 
 @app.route("/api/run", methods=["GET", "POST"])
@@ -461,14 +705,86 @@ def runs_api():
     return jsonify({"runs": _list_runs()})
 
 
-def _resolve_run_output(run_id: str) -> Optional[str]:
-    """Map a run id from /api/runs to its output dir, rejecting path traversal."""
+def _resolve_run_dir(run_id: str) -> Optional[Path]:
+    """Map a run id to its directory, rejecting path traversal."""
     if not run_id or "/" in run_id or "\\" in run_id or run_id in {".", ".."}:
         return None
     run_dir = GUI_RUNS_DIR / run_id
     if not run_dir.is_dir():
         return None
-    return str(run_dir / "output")
+    return run_dir
+
+
+@app.route("/api/runs/<run_id>")
+def run_detail_api(run_id):
+    """Full detail for one run: summary + live progress + input copies."""
+    if not _is_local_request():
+        abort(403)
+    run_dir = _resolve_run_dir(run_id)
+    if run_dir is None:
+        return jsonify({"error": f"找不到任务：{run_id}"}), 404
+    progress = _run_progress(run_dir)
+    detail = _run_summary(run_dir)
+    detail.update(progress)
+
+    input_dir = run_dir / "input"
+    detail["input_files"] = {
+        name: (input_dir / name).is_file()
+        for name in ("init.py", "prompt.md", "runner_adapter.py", "evaluator_callback.py", "config.yaml")
+    }
+    return jsonify({"run": detail})
+
+
+@app.route("/api/runs/<run_id>/log")
+def run_log_api(run_id):
+    """Tail a run's console log. Pass ?offset=N to get only bytes after N."""
+    if not _is_local_request():
+        abort(403)
+    run_dir = _resolve_run_dir(run_id)
+    if run_dir is None:
+        return jsonify({"error": f"找不到任务：{run_id}"}), 404
+
+    log_path = run_dir / "output" / "experiment.log"
+    try:
+        size = os.path.getsize(log_path)
+    except OSError:
+        return jsonify({"run_id": run_id, "offset": 0, "size": 0, "log": "", "eof": True})
+
+    try:
+        offset = int(request.args.get("offset", "0"))
+    except ValueError:
+        return jsonify({"error": "offset 必须是整数。"}), 400
+    offset = max(0, min(offset, size))
+    max_bytes = 256 * 1024
+    with open(log_path, "rb") as log_file:
+        log_file.seek(offset)
+        chunk = log_file.read(max_bytes)
+    return jsonify(
+        {
+            "run_id": run_id,
+            "offset": offset + len(chunk),
+            "size": size,
+            "log": chunk.decode("utf-8", errors="replace"),
+            "eof": offset + len(chunk) >= size,
+        }
+    )
+
+
+@app.route("/api/runs/<run_id>/progress")
+def run_progress_api(run_id):
+    """Lightweight polling endpoint for the live progress of one run."""
+    if not _is_local_request():
+        abort(403)
+    run_dir = _resolve_run_dir(run_id)
+    if run_dir is None:
+        return jsonify({"error": f"找不到任务：{run_id}"}), 404
+    return jsonify({"run_id": run_id, **_run_progress(run_dir)})
+
+
+def _resolve_run_output(run_id: str) -> Optional[str]:
+    """Map a run id from /api/runs to its output dir, rejecting path traversal."""
+    run_dir = _resolve_run_dir(run_id)
+    return str(run_dir / "output") if run_dir is not None else None
 
 
 @app.route("/api/data")

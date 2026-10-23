@@ -71,6 +71,16 @@ class TestVisualizerRunUI(unittest.TestCase):
         self.assertNotIn("配置文件（YAML）".encode(), response.data)
         self.assertNotIn("config.yml".encode(), response.data)
 
+    def test_launch_defaults_api_returns_editor_defaults(self):
+        response = self.client.get("/api/launch")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["initial_program"], self.source_files["init.py"])
+        self.assertEqual(payload["evaluator"], self.source_files["runner_adapter.py"])
+        self.assertEqual(payload["prompt"], self.source_files["prompt.md"])
+        self.assertGreater(payload["iterations"], 0)
+
     def test_visualizer_has_grouped_toolbar_and_in_page_launch_dialog(self):
         response = self.client.get("/")
 
