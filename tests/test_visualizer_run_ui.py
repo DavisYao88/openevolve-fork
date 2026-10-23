@@ -39,9 +39,10 @@ class TestVisualizerRunUI(unittest.TestCase):
         value = {
             "initial_program": "def run_search():\n    return 1\n",
             "evaluator": "def evaluate(program_path):\n    return {'score': 1}\n",
-            "config": "max_iterations: 2\n",
+            "config": "max_iterations: 2\nprompt:\n  system_message: test prompt\n",
             "iterations": 2,
             "evaluator_args": '{"data_path":"data/input.csv"}',
+            "run_name": "测试任务",
         }
         value.update(overrides)
         return value
@@ -128,12 +129,22 @@ class TestVisualizerRunUI(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         run = response.get_json()["run"]
         self.assertEqual(run["status"], "running")
-        run_dir = Path(run["output_dir"])
+        run_dir = Path(run["run_dir"])
         self.assertEqual(
-            (run_dir / "inputs" / "initial_program.py").read_text(encoding="utf-8"),
+            (run_dir / "input" / "init.py").read_text(encoding="utf-8"),
             self.payload()["initial_program"],
         )
+        self.assertTrue((run_dir / "input" / "evaluator.py").is_file())
+        self.assertTrue((run_dir / "input" / "config.yaml").is_file())
+        self.assertEqual(
+            (run_dir / "input" / "prompt.md").read_text(encoding="utf-8"),
+            "test prompt",
+        )
+        self.assertTrue((Path(run["output_dir"]) / "experiment.log").is_file())
+        self.assertEqual(Path(run["output_dir"]).parent, run_dir)
+        self.assertTrue(run["id"].startswith("evolve_task_"))
         command = popen.call_args.args[0]
+        self.assertEqual(command[command.index("--output") + 1], run["output_dir"])
         self.assertIn("--iterations", command)
         self.assertIn("--evaluator-args", command)
         arguments = command[command.index("--evaluator-args") + 1]

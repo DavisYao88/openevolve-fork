@@ -27,7 +27,7 @@
 
     <section class="import-panel">
       <h2>导入实验文件</h2>
-      <p class="help">选择实验 YAML（包含 <code>experiment.task_description</code> 和 <code>experiment.max_iterations</code>）及初始程序 .py 文件，可自动填入任务描述、轮数和初始代码。</p>
+      <p class="help">选择实验 YAML（包含 <code>experiment.task_description</code> 和 <code>experiment.max_iterations</code>）及初始程序 .py 文件，可自动填入任务名、任务描述、轮数和初始代码。</p>
       <div class="import-fields">
         <label for="experiment-file">实验配置（YAML）</label>
         <input id="experiment-file" type="file" accept=".yaml,.yml,text/yaml"/>
@@ -40,6 +40,12 @@
     </section>
 
     <form id="run-form">
+      <section class="field">
+        <label for="run-name">任务名称</label>
+        <input id="run-name" name="run_name" type="text" placeholder="例如：仓店出库量参数优化"/>
+        <p class="help">用于生成任务目录名；留空时使用时间戳。</p>
+      </section>
+
       <section class="field">
         <label for="initial-program">初始程序代码</label>
         <p class="help">这是 OpenEvolve 用来开始进化的种子程序。请保留评测器要求的函数入口。</p>

@@ -37,6 +37,7 @@ importButton.addEventListener("click", async () => {
     document.getElementById("initial-program").value = result.initial_program;
     document.getElementById("config").value = result.config;
     document.getElementById("iterations").value = result.iterations;
+    document.getElementById("run-name").value = result.experiment_name || "";
     document.getElementById("evaluator").value = "";
 
     const name = result.experiment_name ? `“${result.experiment_name}”已导入。` : "实验配置已导入。";
@@ -64,7 +65,7 @@ function showRun(run) {
   };
   statusBadge.textContent = statusLabels[run.status] || run.status;
   statusBadge.className = `badge ${run.status}`;
-  statusMessage.textContent = `输出目录：${run.output_dir}`;
+  statusMessage.textContent = `任务目录：${run.run_dir}；输出目录：${run.output_dir}`;
   logElement.textContent = run.log || "";
   logElement.scrollTop = logElement.scrollHeight;
   visualizerLink.classList.remove("hidden");
@@ -102,6 +103,7 @@ form.addEventListener("submit", async (event) => {
     config: document.getElementById("config").value,
     iterations: Number(document.getElementById("iterations").value),
     evaluator_args: document.getElementById("evaluator-args").value,
+    run_name: document.getElementById("run-name").value,
   };
 
   try {

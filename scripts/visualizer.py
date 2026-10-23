@@ -22,7 +22,7 @@ from manual import create_manual_blueprint
 logger = logging.getLogger(__name__)
 app = Flask(__name__, template_folder="templates")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-GUI_RUNS_DIR = PROJECT_ROOT / "openevolve_gui_runs"
+GUI_RUNS_DIR = PROJECT_ROOT / "evolve_tasks"
 current_run: Optional[dict[str, Any]] = None
 run_lock = threading.Lock()
 
@@ -162,6 +162,7 @@ def _current_run_status() -> Optional[dict[str, Any]]:
     return {
         "id": current_run["id"],
         "status": current_run["status"],
+        "run_dir": current_run["run_dir"],
         "output_dir": current_run["output_dir"],
         "return_code": current_run.get("return_code"),
         "log": log,
@@ -263,6 +264,7 @@ def run_api():
     config_text = payload.get("config", "")
     iterations = payload.get("iterations")
     evaluator_args_text = payload.get("evaluator_args", "")
+    run_name = payload.get("run_name", "")
 
     if not isinstance(initial_program, str) or not initial_program.strip():
         return jsonify({"error": "请填写初始程序代码。"}), 400
@@ -274,6 +276,8 @@ def run_api():
         return jsonify({"error": "进化轮数必须是正整数。"}), 400
     if not isinstance(evaluator_args_text, str):
         return jsonify({"error": "评测器参数必须是 JSON 文本。"}), 400
+    if not isinstance(run_name, str):
+        return jsonify({"error": "任务名称必须是文本。"}), 400
 
     try:
         evaluator_args = json.loads(evaluator_args_text) if evaluator_args_text.strip() else {}
@@ -297,18 +301,35 @@ def run_api():
         if current_run is not None and current_run["process"].poll() is None:
             return jsonify({"error": "已有进化任务正在运行。"}), 409
 
-        run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        safe_name = _re.sub(r"[^\w-]+", "-", run_name.strip()).strip("-_")[:48]
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        run_id = f"evolve_task_{timestamp}" + (f"_{safe_name}" if safe_name else "")
         run_dir = GUI_RUNS_DIR / run_id
-        input_dir = run_dir / "inputs"
-        initial_path = input_dir / "initial_program.py"
+        if run_dir.exists():
+            run_id = f"{run_id}_{uuid.uuid4().hex[:8]}"
+            run_dir = GUI_RUNS_DIR / run_id
+        input_dir = run_dir / "input"
+        output_dir = run_dir / "output"
+        initial_path = input_dir / "init.py"
         evaluator_path = input_dir / "evaluator.py"
         config_path = input_dir / "config.yaml"
+        prompt_path = input_dir / "prompt.md"
         try:
             input_dir.mkdir(parents=True, exist_ok=False)
+            output_dir.mkdir()
             initial_path.write_text(initial_program, encoding="utf-8")
             evaluator_path.write_text(evaluator, encoding="utf-8")
-            if config_text.strip():
-                config_path.write_text(config_text, encoding="utf-8")
+            config_path.write_text(config_text, encoding="utf-8")
+            prompt_config = (
+                parsed_config.get("prompt", {}) if isinstance(parsed_config, dict) else {}
+            )
+            prompt_text = (
+                prompt_config.get("system_message", "") if isinstance(prompt_config, dict) else ""
+            )
+            prompt_path.write_text(
+                prompt_text if isinstance(prompt_text, str) else str(prompt_text),
+                encoding="utf-8",
+            )
         except OSError as error:
             logger.exception("Could not write GUI evolution input files")
             return jsonify({"error": f"无法保存任务输入文件：{error}"}), 500
@@ -321,14 +342,13 @@ def run_api():
             "--iterations",
             str(iterations),
             "--output",
-            str(run_dir),
+            str(output_dir),
         ]
-        if config_text.strip():
-            command.extend(["--config", str(config_path)])
+        command.extend(["--config", str(config_path)])
         if evaluator_args:
             command.extend(["--evaluator-args", json.dumps(evaluator_args)])
 
-        log_path = run_dir / "run.log"
+        log_path = output_dir / "experiment.log"
         try:
             with log_path.open("ab") as log_file:
                 process = subprocess.Popen(
@@ -346,7 +366,8 @@ def run_api():
             "id": run_id,
             "status": "running",
             "process": process,
-            "output_dir": str(run_dir),
+            "run_dir": str(run_dir),
+            "output_dir": str(output_dir),
             "log_path": str(log_path),
         }
         return jsonify({"run": _current_run_status()}), 202

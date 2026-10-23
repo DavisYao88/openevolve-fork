@@ -920,7 +920,7 @@ python scripts/visualizer.py
 python scripts/visualizer.py --path examples/function_minimization/openevolve_output/checkpoints/checkpoint_100/
 ```
 
-打开 `http://127.0.0.1:8080/launch` 可在浏览器中配置并启动任务。可以导入包含 `experiment.task_description` 和 `experiment.max_iterations` 的实验 YAML，以及初始 `.py` 程序；页面会将任务描述和轮数转换为 OpenEvolve 配置。导入不会生成评测器，仍需提供实际运行训练链路并返回指标的 evaluator 源码。该页面会在本机执行 Python 代码，仅应在可信机器上使用。网页启动的任务保存在 `openevolve_gui_runs/`，并成为可视化器当前数据源。
+打开 `http://127.0.0.1:8080/launch` 可在浏览器中配置并启动任务。可以导入包含 `experiment.task_description` 和 `experiment.max_iterations` 的实验 YAML，以及初始 `.py` 程序；页面会将任务描述和轮数转换为 OpenEvolve 配置。导入不会生成评测器，仍需提供实际运行训练链路并返回指标的 evaluator 源码。该页面会在本机执行 Python 代码，仅应在可信机器上使用。网页任务按 `evolve_tasks/evolve_task_<时间戳>_<名称>/input` 与 `output` 组织；OpenEvolve 的 checkpoint 和程序数据保留在 `output/checkpoints/` 下，控制台日志保存在 `output/experiment.log`。
 
 **Features:**
 
