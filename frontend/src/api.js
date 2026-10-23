@@ -21,6 +21,15 @@ export const api = {
   runs() {
     return request("/api/runs");
   },
+  runDetail(runId) {
+    return request(`/api/runs/${encodeURIComponent(runId)}`);
+  },
+  runProgress(runId) {
+    return request(`/api/runs/${encodeURIComponent(runId)}/progress`);
+  },
+  runLog(runId, offset = 0) {
+    return request(`/api/runs/${encodeURIComponent(runId)}/log?offset=${offset}`);
+  },
   launchDefaults() {
     return request("/api/launch");
   },

@@ -15,7 +15,10 @@ const search = ref("");
 const sort = ref("generation");
 const loading = ref(true);
 const error = ref("");
+const progress = ref(null);
+const progressError = ref("");
 let refreshTimer;
+let progressTimer;
 
 const nodes = computed(() => data.value.nodes || []);
 const metrics = computed(() => [...new Set(nodes.value.flatMap((node) => Object.keys(node.metrics || {})))]);
@@ -30,6 +33,20 @@ const maxGeneration = computed(() => Math.max(0, ...nodes.value.map((node) => Nu
 const islandIds = computed(() => [...new Set(nodes.value.map((node) => node.island))].sort((a, b) => a - b));
 const chartWidth = 1120;
 const chartHeight = computed(() => Math.max(480, nodes.value.length * 54 + 90));
+
+const runId = computed(() => route.query.run_id || "");
+const statusLabels = { running: "运行中", completed: "已完成", failed: "失败", interrupted: "已中断", pending: "等待启动" };
+const stageLabels = { llm: "模型生成", diff: "差异应用", evaluation: "评测" };
+const progressPercent = computed(() => {
+  if (!progress.value) return 0;
+  if (Number.isFinite(progress.value.percent)) return progress.value.percent;
+  const total = progress.value.total_iterations || 0;
+  return total ? Math.min(100, (progress.value.finished_iterations / total) * 100) : 0;
+});
+const lastIteration = computed(() => {
+  const iterations = progress.value?.iterations || [];
+  return iterations.length ? iterations[iterations.length - 1] : null;
+});
 
 const coordinates = computed(() => {
   const grouped = new Map();
@@ -103,6 +120,19 @@ async function loadData() {
   }
 }
 
+async function loadProgress() {
+  if (!runId.value) {
+    progress.value = null;
+    return;
+  }
+  try {
+    progressError.value = "";
+    progress.value = await api.runProgress(runId.value);
+  } catch (cause) {
+    progressError.value = cause.message;
+  }
+}
+
 function selectNode(id) {
   selectedId.value = id;
 }
@@ -140,9 +170,14 @@ function saveMetric() {
 
 onMounted(() => {
   loadData();
+  loadProgress();
   refreshTimer = window.setInterval(loadData, 3000);
+  progressTimer = window.setInterval(loadProgress, 3000);
 });
-onUnmounted(() => window.clearInterval(refreshTimer));
+onUnmounted(() => {
+  window.clearInterval(refreshTimer);
+  window.clearInterval(progressTimer);
+});
 </script>
 
 <template>
@@ -177,6 +212,36 @@ onUnmounted(() => window.clearInterval(refreshTimer));
       <label v-if="view !== 'list'" class="check-control"><input v-model="showIslands" type="checkbox">按岛屿分组</label>
       <span class="refresh-label"><span class="live-dot"></span>每 3 秒刷新</span>
     </div>
+
+    <p v-if="progressError" class="message error">{{ progressError }}</p>
+    <section v-if="progress" class="card run-progress">
+      <div class="progress-head">
+        <div>
+          <p class="eyebrow">Run Progress</p>
+          <h2>{{ runId }}</h2>
+        </div>
+        <span class="status-badge" :class="progress.status">{{ statusLabels[progress.status] || progress.status }}</span>
+      </div>
+      <div class="progress-bar-track" role="progressbar" :aria-valuenow="progressPercent" aria-valuemin="0" aria-valuemax="100">
+        <div class="progress-bar-fill" :class="progress.status" :style="{ width: `${progressPercent}%` }"></div>
+      </div>
+      <div class="progress-stats">
+        <div><small>进度</small><strong>{{ progress.finished_iterations }} / {{ progress.total_iterations }}</strong></div>
+        <div><small>成功</small><strong>{{ progress.completed_iterations }}</strong></div>
+        <div><small>失败</small><strong>{{ progress.failed_iterations }}</strong></div>
+        <div><small>检查点</small><strong>{{ progress.has_checkpoint ? progress.checkpoints.join(", ") : "尚未生成" }}</strong></div>
+        <div><small>token</small><strong>{{ progress.tokens?.prompt || 0 }} / {{ progress.tokens?.completion || 0 }}</strong></div>
+      </div>
+      <p v-if="lastIteration" class="progress-last">
+        最近一轮：第 {{ lastIteration.iteration }} 轮 ·
+        <b>{{ lastIteration.status === "completed" ? "成功" : "失败" }}</b>
+        <template v-if="lastIteration.stage"> · 阶段 {{ stageLabels[lastIteration.stage] || lastIteration.stage }}</template>
+        <template v-if="lastIteration.error"> · {{ lastIteration.error }}</template>
+      </p>
+      <p v-if="progress.status === 'running' && !progress.has_checkpoint" class="progress-hint">
+        正在运行。检查点按固定轮次间隔保存，生成之前下方图表不会出现程序节点。
+      </p>
+    </section>
 
     <p v-if="error" class="message error">{{ error }}</p>
     <div v-else-if="loading" class="card empty-state">正在读取进化数据…</div>
@@ -311,6 +376,25 @@ export default { components: { NodeDetail } };
 </script>
 
 <style scoped>
+.run-progress { padding: 16px 18px; margin-bottom: 18px; }
+.progress-head { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+.progress-head h2 { margin:2px 0 0; font:600 14px "IBM Plex Mono", monospace; }
+.status-badge { padding:5px 10px; border-radius:100px; background:#eef1f5; color:#68748a; font-size:10px; font-weight:700; }
+.status-badge.completed { background:#e7f7ef; color:#178454; }
+.status-badge.running { background:#e8efff; color:#315fce; }
+.status-badge.failed { background:#fff0f0; color:#c14242; }
+.status-badge.interrupted { background:#fff5dd; color:#946407; }
+.progress-bar-track { height:8px; margin:14px 0; overflow:hidden; border-radius:100px; background:#eef1f6; }
+.progress-bar-fill { height:100%; border-radius:100px; background:#315fce; transition:width .3s ease; }
+.progress-bar-fill.failed { background:#c14242; }
+.progress-bar-fill.interrupted { background:#c99a25; }
+.progress-bar-fill.completed { background:#178454; }
+.progress-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(110px, 1fr)); gap:10px; }
+.progress-stats > div { display:flex; flex-direction:column; gap:4px; }
+.progress-stats small { color:var(--muted); font-size:10px; }
+.progress-stats strong { font-size:12px; overflow-wrap:anywhere; }
+.progress-last, .progress-hint { margin:12px 0 0; color:#57647a; font-size:11px; overflow-wrap:anywhere; }
+.progress-hint { color:var(--muted); }
 .view-switch { display:flex; gap:5px; padding:4px; border:1px solid var(--line); border-radius:10px; background:#fff; }
 .view-switch .button { min-height:34px; border:0; background:transparent; box-shadow:none; }
 .view-switch .button.selected { background:var(--accent-soft); color:var(--accent); }
