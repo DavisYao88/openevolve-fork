@@ -8,4 +8,12 @@ export function updateDimensions() {
     const toolbar = document.getElementById('toolbar');
     const toolbarHeight = toolbar ? toolbar.offsetHeight : 0;
     height = window.innerHeight - toolbarHeight;
+    document.documentElement.style.setProperty('--toolbar-height', `${toolbarHeight}px`);
 }
+
+const toolbar = document.getElementById('toolbar');
+if (toolbar && 'ResizeObserver' in window) {
+    new ResizeObserver(updateDimensions).observe(toolbar);
+}
+window.addEventListener('resize', updateDimensions);
+updateDimensions();

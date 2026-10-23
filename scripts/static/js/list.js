@@ -1,5 +1,5 @@
 import { allNodeData, archiveProgramIds, formatMetrics, renderMetricBar, getHighlightNodes, getSelectedMetric, setAllNodeData, selectedProgramId, setSelectedProgramId } from './main.js';
-import { showSidebar, setSidebarSticky, showSidebarContent } from './sidebar.js';
+import { showSidebar, setSidebarSticky, showSidebarContent, programUrl } from './sidebar.js';
 import { selectProgram, scrollAndSelectNodeById } from './graph.js';
 import { selectPerformanceNodeById } from './performance.js';
 
@@ -131,7 +131,7 @@ export function renderNodeList(nodes) {
         metricsBlock.style.flex = '1 1 0%';
         row.appendChild(infoBlock);
 
-        let openLink = `<a href="/program/${node.id}" target="_blank" class="open-in-new" style="font-size:0.95em;">[在新窗口打开]</a>`;
+        let openLink = `<a href="${programUrl(node.id)}" target="_blank" class="open-in-new" style="font-size:0.95em;">[在新窗口打开]</a>`;
         const openDiv = document.createElement('div');
         openDiv.style.textAlign = 'center';
         openDiv.style.margin = '-0.5em 0 0.5em 0';

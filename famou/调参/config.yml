@@ -1,0 +1,46 @@
+# OpenEvolve configuration for famou parameter optimization.
+max_iterations: 50
+checkpoint_interval: 5
+log_level: INFO
+random_seed: 42
+language: python
+
+diff_based_evolution: true
+enforce_evolve_blocks: true
+max_code_length: 20000
+
+llm:
+  primary_model: "gpt-6.1-sol"
+  api_base: "https://api.openai.com/v1"
+  api_key: "${OPENAI_API_KEY}"
+  temperature: 0.4
+  max_tokens: 12000
+  timeout: 120
+  retries: 3
+
+prompt:
+  template_dir: .
+  system_message: prompt
+
+database:
+  population_size: 30
+  archive_size: 20
+  num_islands: 3
+  elite_selection_ratio: 0.2
+  exploitation_ratio: 0.7
+  similarity_threshold: 0.99
+
+evaluator:
+  timeout: 3600
+  max_retries: 1
+  cascade_evaluation: false
+  parallel_evaluations: 1
+  enable_artifacts: true
+  evaluator_args:
+    # Configure this argv list for your production adapter. It must accept the
+    # candidate init.py at {program_path} and print {"wmape": ..., "bias_ratio": ...}
+    # as a single JSON object to stdout. Keep shell execution disabled.
+    runner_command: []
+    # Optional working directory for the adapter; null uses this folder.
+    runner_cwd: null
+    timeout_seconds: 3500

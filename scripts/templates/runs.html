@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>OpenEvolve – 任务列表</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/launch.css') }}"/>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runs.css') }}"/>
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">OpenEvolve</p>
+        <h1>演化任务列表</h1>
+        <p class="intro">每次从“新建进化”启动的任务会保存在 <code>evolve_tasks/</code> 下。选择任务可查看其最新 checkpoint。</p>
+      </div>
+      <nav class="page-nav" aria-label="OpenEvolve pages">
+        <a href="/">进化可视化</a>
+        <a href="/manual">人工反馈</a>
+        <a href="/launch">新建进化</a>
+        <a href="/runs" aria-current="page">任务列表</a>
+      </nav>
+    </header>
+
+    <div class="runs-toolbar">
+      <button id="runs-refresh" class="secondary" type="button">刷新</button>
+      <span id="runs-summary" class="help"></span>
+    </div>
+
+    <p id="runs-error" class="runs-error hidden" role="alert"></p>
+
+    <div id="runs-empty" class="runs-empty hidden">
+      还没有演化任务。先到 <a href="/launch">新建进化</a> 启动一个。
+    </div>
+
+    <div id="runs-table-wrap" class="runs-table-wrap hidden">
+      <table class="runs-table">
+        <thead>
+          <tr>
+            <th>任务</th>
+            <th>状态</th>
+            <th>模型</th>
+            <th>轮数</th>
+            <th>程序数</th>
+            <th>最优指标</th>
+            <th>更新时间</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="runs-body"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script src="{{ url_for('static', filename='js/runs.js') }}" defer></script>
+</body>
+</html>

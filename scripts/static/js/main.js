@@ -82,6 +82,7 @@ function loadAndRenderData(data) {
     renderGraph(data);
     renderNodeList(data.nodes);
     document.getElementById('checkpoint-label').textContent =
+        (currentRunId ? `任务：${currentRunId} · ` : "") +
         "检查点：" + (data.checkpoint_dir || '静态导出');
     const metricSelect = document.getElementById('metric-select');
     const prevMetric = metricSelect.value || localStorage.getItem('selectedMetric') || null;
@@ -115,11 +116,19 @@ function loadAndRenderData(data) {
     }
 }
 
+// The task list links here as /?run_id=evolve_task_...; without it the page
+// keeps showing whichever run this server process handled most recently.
+export const currentRunId = new URLSearchParams(window.location.search).get('run_id') || '';
+
+function dataUrl() {
+    return currentRunId ? `/api/data?run_id=${encodeURIComponent(currentRunId)}` : '/api/data';
+}
+
 if (window.STATIC_DATA) {
     loadAndRenderData(window.STATIC_DATA);
 } else {
     function fetchAndRender() {
-        fetch('/api/data')
+        fetch(dataUrl())
             .then(resp => resp.json())
             .then(data => {
                 const dataStr = JSON.stringify(data);

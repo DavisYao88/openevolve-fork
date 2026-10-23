@@ -920,7 +920,7 @@ python scripts/visualizer.py
 python scripts/visualizer.py --path examples/function_minimization/openevolve_output/checkpoints/checkpoint_100/
 ```
 
-打开 `http://127.0.0.1:8080/launch` 可在浏览器中配置并启动任务。可以导入包含 `experiment.task_description` 和 `experiment.max_iterations` 的实验 YAML，以及初始 `.py` 程序；页面会将任务描述和轮数转换为 OpenEvolve 配置。导入不会生成评测器，仍需提供实际运行训练链路并返回指标的 evaluator 源码。该页面会在本机执行 Python 代码，仅应在可信机器上使用。网页任务按 `evolve_tasks/evolve_task_<时间戳>_<名称>/input` 与 `output` 组织；OpenEvolve 的 checkpoint 和程序数据保留在 `output/checkpoints/` 下，控制台日志保存在 `output/experiment.log`。
+打开 `http://127.0.0.1:8080/launch` 可在浏览器中配置并启动任务。页面只提供提示词、初始程序、评估器代码和进化轮数四项输入，不提供文件导入，也不显示运行 YAML。默认内容从 `famou/调参/` 读取；隐藏的全局运行配置为 `evolve_tasks/global_config.yml`。启动时服务把表单代码复制到本次任务目录，并自动生成指向本轮 `input/runner_adapter.py` 的 `evaluator.evaluator_args.runner_command`；提示词模板指向本轮 `input/prompt.md`。页面不会改写 `famou/调参/` 下的源文件；本轮输入副本、生成的运行配置和输出均保存在 `evolve_tasks/evolve_task_<时间戳>/input` 与 `output`。页面中的评测器代码需实现真实训练适配器；该页面会在本机执行 Python 代码，仅应在可信机器上使用。OpenEvolve 的 checkpoint 保存在任务 `output/checkpoints/` 下，控制台日志保存在 `output/experiment.log`。
 
 **Features:**
 

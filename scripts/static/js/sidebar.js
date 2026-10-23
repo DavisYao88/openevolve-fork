@@ -1,5 +1,12 @@
-import { allNodeData, archiveProgramIds, formatMetrics, renderMetricBar, getHighlightNodes, selectedProgramId, setSelectedProgramId } from './main.js';
+import { allNodeData, archiveProgramIds, formatMetrics, renderMetricBar, getHighlightNodes, selectedProgramId, setSelectedProgramId, currentRunId } from './main.js';
 import { scrollAndSelectNodeById } from './graph.js';
+
+// Keep the run selection when opening a program in its own tab, otherwise the
+// new page would fall back to whatever run this server handled last.
+export function programUrl(programId) {
+    const suffix = currentRunId ? `?run_id=${encodeURIComponent(currentRunId)}` : '';
+    return `/program/${programId}${suffix}`;
+}
 
 const sidebar = document.getElementById('sidebar');
 // Add a draggable resizer to let users change the sidebar width.
@@ -10,7 +17,7 @@ const sidebar = document.getElementById('sidebar');
     try {
         const STORAGE_KEY = 'sidebarWidth';
         const DEFAULT_WIDTH_PX = 360;
-        const MIN_WIDTH_PX = 200;
+        const MIN_WIDTH_PX = 280;
         const MAX_WIDTH_PX = Math.max(window.innerWidth - 100, 400);
 
         // Restore saved width (if any)
@@ -291,7 +298,7 @@ export function showSidebarContent(d, fromHover = false) {
     }
     let locatorBtn = '<button id="sidebar-locator-btn" title="定位所选程序" aria-label="定位所选程序" style="position:absolute;top:0.05em;right:2.5em;font-size:1.5em;background:none;border:none;color:#FFD600;cursor:pointer;z-index:10;line-height:1;filter:drop-shadow(0 0 2px #FFD600);">⦿</button>';
     let closeBtn = '<button id="sidebar-close-btn" style="position:absolute;top:0.05em;right:0.15em;font-size:1.6em;background:none;border:none;color:#888;cursor:pointer;z-index:10;line-height:1;">&times;</button>';
-    let openLink = '<div style="text-align:center;margin:-1em 0 1.2em 0;"><a href="/program/' + d.id + '" target="_blank" class="open-in-new" style="font-size:0.95em;">[在新窗口打开]</a></div>';
+    let openLink = '<div style="text-align:center;margin:-1em 0 1.2em 0;"><a href="' + programUrl(d.id) + '" target="_blank" class="open-in-new" style="font-size:0.95em;">[在新窗口打开]</a></div>';
     let tabHtml = '';
     let tabContentHtml = '';
     let tabNames = [];
@@ -657,7 +664,7 @@ export function showSidebarContent(d, fromHover = false) {
 }
 
 export function openInNewTab(event, d) {
-    const url = `/program/${d.id}`;
+    const url = programUrl(d.id);
     window.open(url, '_blank');
     event.stopPropagation();
 }

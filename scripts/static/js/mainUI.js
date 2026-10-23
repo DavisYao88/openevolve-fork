@@ -32,11 +32,14 @@ const tabs = ["branching", "performance", "list"];
 tabs.forEach(tab => {
     document.getElementById(`tab-${tab}`).addEventListener('click', function() {
         tabs.forEach(t => {
-            document.getElementById(`tab-${t}`).classList.remove('active');
+            const tabButton = document.getElementById(`tab-${t}`);
+            tabButton.classList.remove('active');
+            tabButton.setAttribute('aria-selected', 'false');
             const view = document.getElementById(`view-${t}`);
             if (view) view.style.display = 'none';
         });
         this.classList.add('active');
+        this.setAttribute('aria-selected', 'true');
         const view = document.getElementById(`view-${tab}`);
         if (view) view.style.display = 'block';
         // Synchronize node selection when switching tabs

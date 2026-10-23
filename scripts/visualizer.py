@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__, template_folder="templates")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GUI_RUNS_DIR = PROJECT_ROOT / "evolve_tasks"
+TASK_FILES_DIR = PROJECT_ROOT / "famou" / "调参"
+GLOBAL_CONFIG_PATH = GUI_RUNS_DIR / "global_config.yml"
 current_run: Optional[dict[str, Any]] = None
 run_lock = threading.Lock()
 
@@ -41,6 +43,133 @@ def find_latest_checkpoint(base_folder):
     checkpoint_folders.sort(key=lambda x: os.path.getmtime(x), reverse=True)
     logger.debug(f"Found checkpoint folder: {checkpoint_folders[0]}")
     return checkpoint_folders[0]
+
+
+def _latest_checkpoint_for(checkpoint_root):
+    """Return the newest checkpoint folder under a run output dir, or None."""
+    if not os.path.isdir(checkpoint_root):
+        return None
+    return find_latest_checkpoint(checkpoint_root)
+
+
+def _read_run_generation(run_dir):
+    """Best-effort count of generated programs in a run output dir."""
+    checkpoint = run_dir / "output" / "checkpoints"
+    if not checkpoint.is_dir():
+        return 0
+    newest = _latest_checkpoint_for(str(checkpoint))
+    if not newest:
+        return 0
+    programs_dir = os.path.join(newest, "programs")
+    try:
+        return len([name for name in os.listdir(programs_dir) if name.endswith(".json")])
+    except OSError:
+        return 0
+
+
+def _run_summary(run_dir):
+    """Describe one evolve_tasks/evolve_task_* run folder for the task list."""
+    output_dir = run_dir / "output"
+    input_dir = run_dir / "input"
+    checkpoint = _latest_checkpoint_for(str(output_dir)) if output_dir.is_dir() else None
+
+    status = "unknown"
+    return_code = None
+    log_text = ""
+    log_path = output_dir / "experiment.log"
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as log_file:
+            log_text = log_file.read()
+    except OSError:
+        pass
+    if "Evolution complete!" in log_text or "✅ Evolution completed" in log_text:
+        status = "completed"
+        return_code = 0
+    elif log_text:
+        status = "failed"
+    elif checkpoint:
+        status = "interrupted"
+
+    iterations = 0
+    config_path = input_dir / "config.yaml"
+    if config_path.is_file():
+        try:
+            import yaml
+
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            if isinstance(config, dict) and isinstance(config.get("max_iterations"), int):
+                iterations = config["max_iterations"]
+        except (OSError, yaml.YAMLError):
+            pass
+
+    best_metrics = {}
+    best_info = output_dir / "best" / "best_program_info.json"
+    if best_info.is_file():
+        try:
+            with open(best_info, "r", encoding="utf-8") as info_file:
+                info = json.load(info_file)
+            if isinstance(info, dict) and isinstance(info.get("metrics"), dict):
+                best_metrics = info["metrics"]
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    model = ""
+    if config_path.is_file():
+        try:
+            import yaml
+
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            llm = config.get("llm") if isinstance(config, dict) else None
+            if isinstance(llm, dict):
+                if isinstance(llm.get("primary_model"), str):
+                    model = llm["primary_model"]
+                elif isinstance(llm.get("models"), list) and llm["models"]:
+                    first = llm["models"][0]
+                    if isinstance(first, dict) and isinstance(first.get("name"), str):
+                        model = first["name"]
+        except (OSError, yaml.YAMLError):
+            pass
+
+    try:
+        updated_at = datetime.fromtimestamp(os.path.getmtime(run_dir)).strftime("%Y-%m-%d %H:%M:%S")
+    except OSError:
+        updated_at = ""
+
+    try:
+        run_dir_display = run_dir.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        # Tests and ad-hoc runs point GUI_RUNS_DIR outside the repo.
+        run_dir_display = run_dir.as_posix()
+
+    return {
+        "id": run_dir.name,
+        "run_dir": run_dir_display,
+        "output_dir": Path(os.path.relpath(output_dir, PROJECT_ROOT)).as_posix(),
+        "status": status,
+        "return_code": return_code,
+        "iterations": iterations,
+        "programs": _read_run_generation(run_dir),
+        "best_metrics": best_metrics,
+        "model": model,
+        "has_checkpoint": checkpoint is not None,
+        "checkpoint_dir": (
+            Path(os.path.relpath(checkpoint, PROJECT_ROOT)).as_posix() if checkpoint else ""
+        ),
+        "updated_at": updated_at,
+    }
+
+
+def _list_runs():
+    """List every GUI-launched evolution run, newest first."""
+    if not GUI_RUNS_DIR.is_dir():
+        return []
+    runs = [
+        _run_summary(path)
+        for path in GUI_RUNS_DIR.iterdir()
+        if path.is_dir() and path.name.startswith("evolve_task_")
+    ]
+    runs.sort(key=lambda run: run["updated_at"], reverse=True)
+    return runs
 
 
 def load_evolution_data(checkpoint_folder):
@@ -159,11 +288,14 @@ def _current_run_status() -> Optional[dict[str, Any]]:
     except OSError:
         log = ""
 
+    project_root = str(PROJECT_ROOT)
+    log = log.replace(f"{project_root}{os.sep}", "")
+
     return {
         "id": current_run["id"],
         "status": current_run["status"],
-        "run_dir": current_run["run_dir"],
-        "output_dir": current_run["output_dir"],
+        "run_dir": Path(os.path.relpath(current_run["run_dir"], PROJECT_ROOT)).as_posix(),
+        "output_dir": Path(os.path.relpath(current_run["output_dir"], PROJECT_ROOT)).as_posix(),
         "return_code": current_run.get("return_code"),
         "log": log,
     }
@@ -174,71 +306,15 @@ def launch_page():
     if not _is_local_request():
         abort(403)
 
-    example_dir = PROJECT_ROOT / "examples" / "function_minimization"
+    import yaml
+
+    config = yaml.safe_load(GLOBAL_CONFIG_PATH.read_text(encoding="utf-8"))
     return render_template(
         "launch.html",
-        initial_program=(example_dir / "initial_program.py").read_text(encoding="utf-8"),
-        evaluator=(example_dir / "evaluator.py").read_text(encoding="utf-8"),
-        config=(example_dir / "config.yaml").read_text(encoding="utf-8"),
-    )
-
-
-@app.route("/api/import-experiment", methods=["POST"])
-def import_experiment_api():
-    if not _is_local_request():
-        abort(403)
-
-    experiment_file = request.files.get("experiment")
-    program_file = request.files.get("program")
-    if experiment_file is None or program_file is None:
-        return jsonify({"error": "请选择实验 YAML 文件和初始程序文件。"}), 400
-    if not experiment_file.filename or not program_file.filename:
-        return jsonify({"error": "实验 YAML 文件和初始程序文件都不能为空。"}), 400
-    if Path(experiment_file.filename).suffix.lower() not in {".yaml", ".yml"}:
-        return jsonify({"error": "实验配置文件必须是 .yaml 或 .yml 格式。"}), 400
-    if Path(program_file.filename).suffix.lower() != ".py":
-        return jsonify({"error": "初始程序文件必须是 .py 格式。"}), 400
-
-    try:
-        import yaml
-
-        experiment_data = yaml.safe_load(experiment_file.stream)
-    except yaml.YAMLError as error:
-        return jsonify({"error": f"实验文件不是有效的 YAML：{error}"}), 400
-    if not isinstance(experiment_data, dict):
-        return jsonify({"error": "实验 YAML 顶层必须是对象。"}), 400
-
-    experiment = experiment_data.get("experiment")
-    if not isinstance(experiment, dict):
-        return jsonify({"error": "未找到 experiment 对象。"}), 400
-
-    task_description = experiment.get("task_description")
-    if not isinstance(task_description, str) or not task_description.strip():
-        return jsonify({"error": "experiment.task_description 必须是非空文本。"}), 400
-
-    iterations = experiment.get("max_iterations")
-    if not isinstance(iterations, int) or isinstance(iterations, bool) or iterations < 1:
-        return jsonify({"error": "experiment.max_iterations 必须是正整数。"}), 400
-
-    try:
-        initial_program = program_file.stream.read().decode("utf-8")
-    except UnicodeDecodeError:
-        return jsonify({"error": "初始程序必须是 UTF-8 编码的文本文件。"}), 400
-    if not initial_program.strip():
-        return jsonify({"error": "初始程序文件不能为空。"}), 400
-
-    config = {
-        "max_iterations": iterations,
-        "prompt": {"system_message": task_description},
-    }
-    return jsonify(
-        {
-            "initial_program": initial_program,
-            "iterations": iterations,
-            "config": yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
-            "experiment_name": str(experiment.get("name") or ""),
-            "evaluator_reference": str(experiment.get("evaluator") or ""),
-        }
+        initial_program=(TASK_FILES_DIR / "init.py").read_text(encoding="utf-8"),
+        evaluator=(TASK_FILES_DIR / "runner_adapter.py").read_text(encoding="utf-8"),
+        prompt=(TASK_FILES_DIR / "prompt.md").read_text(encoding="utf-8"),
+        iterations=config["max_iterations"],
     )
 
 
@@ -260,40 +336,37 @@ def run_api():
         return jsonify({"error": "请求内容必须是 JSON 对象。"}), 400
 
     initial_program = payload.get("initial_program")
+    prompt_text = payload.get("prompt")
     evaluator = payload.get("evaluator")
-    config_text = payload.get("config", "")
     iterations = payload.get("iterations")
-    evaluator_args_text = payload.get("evaluator_args", "")
-    run_name = payload.get("run_name", "")
 
     if not isinstance(initial_program, str) or not initial_program.strip():
         return jsonify({"error": "请填写初始程序代码。"}), 400
+    if not isinstance(prompt_text, str):
+        return jsonify({"error": "任务提示词必须是文本。"}), 400
     if not isinstance(evaluator, str) or not evaluator.strip():
-        return jsonify({"error": "请填写评测器代码。"}), 400
-    if not isinstance(config_text, str):
-        return jsonify({"error": "配置内容必须是 YAML 文本。"}), 400
+        return jsonify({"error": "请填写真实训练评估脚本代码。"}), 400
     if not isinstance(iterations, int) or isinstance(iterations, bool) or iterations < 1:
         return jsonify({"error": "进化轮数必须是正整数。"}), 400
-    if not isinstance(evaluator_args_text, str):
-        return jsonify({"error": "评测器参数必须是 JSON 文本。"}), 400
-    if not isinstance(run_name, str):
-        return jsonify({"error": "任务名称必须是文本。"}), 400
+    if not prompt_text.strip():
+        return jsonify({"error": "任务提示词不能为空。"}), 400
+    import yaml
 
     try:
-        evaluator_args = json.loads(evaluator_args_text) if evaluator_args_text.strip() else {}
-    except json.JSONDecodeError as error:
-        return jsonify({"error": f"评测器参数不是有效的 JSON：{error.msg}。"}), 400
+        config = yaml.safe_load(GLOBAL_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as error:
+        logger.exception("Could not load global OpenEvolve configuration")
+        return jsonify({"error": f"无法读取全局运行配置：{error}"}), 500
+    if not isinstance(config, dict):
+        return jsonify({"error": "全局运行配置必须是 YAML 键值映射。"}), 500
+    evaluator_config = config.get("evaluator")
+    if not isinstance(evaluator_config, dict):
+        return jsonify({"error": "全局配置缺少 evaluator 配置段。"}), 500
+    evaluator_args = evaluator_config.setdefault("evaluator_args", {})
     if not isinstance(evaluator_args, dict):
-        return jsonify({"error": "评测器参数必须是 JSON 对象。"}), 400
-
-    try:
-        import yaml
-
-        parsed_config = yaml.safe_load(config_text) if config_text.strip() else {}
-    except yaml.YAMLError as error:
-        return jsonify({"error": f"配置不是有效的 YAML：{error}"}), 400
-    if parsed_config is not None and not isinstance(parsed_config, dict):
-        return jsonify({"error": "YAML 配置的顶层内容必须是键值映射。"}), 400
+        return jsonify({"error": "全局配置 evaluator.evaluator_args 必须是映射。"}), 500
+    config["max_iterations"] = iterations
+    config["prompt"] = {"template_dir": ".", "system_message": "prompt"}
 
     if not run_lock.acquire(blocking=False):
         return jsonify({"error": "正在启动另一个任务，请稍后再试。"}), 409
@@ -301,9 +374,8 @@ def run_api():
         if current_run is not None and current_run["process"].poll() is None:
             return jsonify({"error": "已有进化任务正在运行。"}), 409
 
-        safe_name = _re.sub(r"[^\w-]+", "-", run_name.strip()).strip("-_")[:48]
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        run_id = f"evolve_task_{timestamp}" + (f"_{safe_name}" if safe_name else "")
+        run_id = f"evolve_task_{timestamp}"
         run_dir = GUI_RUNS_DIR / run_id
         if run_dir.exists():
             run_id = f"{run_id}_{uuid.uuid4().hex[:8]}"
@@ -311,25 +383,27 @@ def run_api():
         input_dir = run_dir / "input"
         output_dir = run_dir / "output"
         initial_path = input_dir / "init.py"
-        evaluator_path = input_dir / "evaluator.py"
+        evaluator_path = input_dir / "evaluator_callback.py"
+        adapter_path = input_dir / "runner_adapter.py"
         config_path = input_dir / "config.yaml"
         prompt_path = input_dir / "prompt.md"
         try:
             input_dir.mkdir(parents=True, exist_ok=False)
             output_dir.mkdir()
             initial_path.write_text(initial_program, encoding="utf-8")
-            evaluator_path.write_text(evaluator, encoding="utf-8")
-            config_path.write_text(config_text, encoding="utf-8")
-            prompt_config = (
-                parsed_config.get("prompt", {}) if isinstance(parsed_config, dict) else {}
-            )
-            prompt_text = (
-                prompt_config.get("system_message", "") if isinstance(prompt_config, dict) else ""
-            )
-            prompt_path.write_text(
-                prompt_text if isinstance(prompt_text, str) else str(prompt_text),
+            evaluator_path.write_text(
+                (TASK_FILES_DIR / "evaluator.py").read_text(encoding="utf-8"),
                 encoding="utf-8",
             )
+            adapter_path.write_text(evaluator, encoding="utf-8")
+            prompt_path.write_text(prompt_text, encoding="utf-8")
+            evaluator_args["runner_command"] = [
+                sys.executable,
+                str(adapter_path),
+                "{program_path}",
+            ]
+            config_text = yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
+            config_path.write_text(config_text, encoding="utf-8")
         except OSError as error:
             logger.exception("Could not write GUI evolution input files")
             return jsonify({"error": f"无法保存任务输入文件：{error}"}), 500
@@ -345,8 +419,6 @@ def run_api():
             str(output_dir),
         ]
         command.extend(["--config", str(config_path)])
-        if evaluator_args:
-            command.extend(["--evaluator-args", json.dumps(evaluator_args)])
 
         log_path = output_dir / "experiment.log"
         try:
@@ -375,14 +447,44 @@ def run_api():
         run_lock.release()
 
 
+@app.route("/runs")
+def runs_page():
+    if not _is_local_request():
+        abort(403)
+    return render_template("runs.html")
+
+
+@app.route("/api/runs")
+def runs_api():
+    if not _is_local_request():
+        abort(403)
+    return jsonify({"runs": _list_runs()})
+
+
+def _resolve_run_output(run_id: str) -> Optional[str]:
+    """Map a run id from /api/runs to its output dir, rejecting path traversal."""
+    if not run_id or "/" in run_id or "\\" in run_id or run_id in {".", ".."}:
+        return None
+    run_dir = GUI_RUNS_DIR / run_id
+    if not run_dir.is_dir():
+        return None
+    return str(run_dir / "output")
+
+
 @app.route("/api/data")
 def data():
     global checkpoint_dir
-    base_folder = (
-        current_run["output_dir"]
-        if current_run is not None
-        else os.environ.get("EVOLVE_OUTPUT", "examples/")
-    )
+    run_id = request.args.get("run_id", "").strip()
+    if run_id:
+        base_folder = _resolve_run_output(run_id)
+        if base_folder is None:
+            return jsonify({"error": f"找不到任务：{run_id}"}), 404
+    else:
+        base_folder = (
+            current_run["output_dir"]
+            if current_run is not None
+            else os.environ.get("EVOLVE_OUTPUT", "examples/")
+        )
     checkpoint_dir = find_latest_checkpoint(base_folder)
     if not checkpoint_dir:
         logger.info(f"No checkpoints found in {base_folder}")
@@ -397,6 +499,15 @@ def data():
 @app.route("/program/<program_id>")
 def program_page(program_id):
     global checkpoint_dir
+    run_id = request.args.get("run_id", "").strip()
+    if run_id:
+        base_folder = _resolve_run_output(run_id)
+        if base_folder is None:
+            return f"找不到任务：{run_id}", 404
+        resolved = find_latest_checkpoint(base_folder)
+        if resolved is None:
+            return f"任务 {run_id} 还没有 checkpoint", 404
+        checkpoint_dir = resolved
     if checkpoint_dir is None:
         return "No checkpoint loaded", 500
 

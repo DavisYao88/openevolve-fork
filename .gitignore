@@ -40,7 +40,8 @@ ENV/
 # Output files
 examples/*/output/
 openevolve_output*/
-evolve_tasks/
+evolve_tasks/*
+!evolve_tasks/global_config.yml
 *.log
 demo_output*/
 pr_sanity*/

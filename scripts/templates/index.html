@@ -9,39 +9,55 @@
 </head>
 <body>
     <div id="toolbar">
-        <div style="display:flex;flex-direction:column;min-width:220px;">
-            <span style="font-size:1.1em;font-weight:bold;">OpenEvolve 进化可视化</span>
-            <span id="checkpoint-label" style="font-size:0.9em;color:#888;">检查点：无</span>
+        <div class="toolbar-primary">
+            <div class="toolbar-brand">
+                <strong>OpenEvolve</strong>
+                <span>进化可视化</span>
+                <span id="checkpoint-label" title="检查点：无">检查点：无</span>
+            </div>
+            <nav class="page-nav" aria-label="OpenEvolve 页面导航">
+                <a href="/" aria-current="page">可视化</a>
+                <a href="/manual">人工反馈</a>
+                <a href="/launch" id="open-launch-dialog" aria-haspopup="dialog">新建进化</a>
+                <a href="/runs">任务列表</a>
+            </nav>
+            <div class="tabs" role="tablist" aria-label="可视化视图">
+                <button type="button" class="tab active" id="tab-branching" role="tab" aria-selected="true">进化树</button>
+                <button type="button" class="tab" id="tab-performance" role="tab" aria-selected="false">性能趋势</button>
+                <button type="button" class="tab" id="tab-list" role="tab" aria-selected="false">程序列表</button>
+            </div>
         </div>
-        <div class="toolbar-spacer"></div>
-        <nav class="page-nav" aria-label="OpenEvolve 页面导航">
-            <a href="/" aria-current="page">进化可视化</a>
-            <a href="/manual">人工反馈</a>
-            <a href="/launch">新建进化</a>
-        </nav>
-        <div class="tabs">
-            <div class="tab active" id="tab-branching">进化树</div>
-            <div class="tab" id="tab-performance">性能趋势</div>
-            <div class="tab" id="tab-list">程序列表</div>
-        </div>
-        <label class="toolbar-label" for="metric-select">指标：
-        <select id="metric-select">
-            <option value="combined_score" selected>combined_score</option>
-        </select></label>
-        <label class="toolbar-label" for="highlight-select">高亮：
-        <select id="highlight-select">
-            <option value="none">无</option>
-            <option value="top" selected>最高分</option>
-            <option value="first">初始代</option>
-            <option value="failed">评测失败</option>
-            <option value="unset">指标未设置</option>
-        </select></label>
-        <div class="toolbar-darkmode">
-            <label class="toolbar-label">深色模式：</label>
-            <input type="checkbox" id="darkmode-toggle">
-            <span id="darkmode-label">🌙</span>
+        <div class="toolbar-settings">
+            <label class="toolbar-filter" for="metric-select">
+                <span>指标</span>
+                <select id="metric-select">
+                    <option value="combined_score" selected>combined_score</option>
+                </select>
+            </label>
+            <label class="toolbar-filter" for="highlight-select">
+                <span>高亮</span>
+                <select id="highlight-select">
+                    <option value="none">无</option>
+                    <option value="top" selected>最高分</option>
+                    <option value="first">初始代</option>
+                    <option value="failed">评测失败</option>
+                    <option value="unset">指标未设置</option>
+                </select>
+            </label>
+            <div class="toolbar-darkmode">
+                <label for="darkmode-toggle">深色模式</label>
+                <input type="checkbox" id="darkmode-toggle">
+                <span id="darkmode-label">🌙</span>
+            </div>
         </div>
     </div>
+    <dialog id="launch-dialog" class="launch-dialog" aria-labelledby="launch-dialog-title">
+        <div class="launch-dialog-header">
+            <h2 id="launch-dialog-title">新建进化</h2>
+            <button type="button" id="close-launch-dialog" aria-label="关闭新建进化窗口">关闭</button>
+        </div>
+        <iframe title="新建 OpenEvolve 进化任务" src="about:blank"></iframe>
+    </dialog>
     <div id="sidebar">
         <div id="sidebar-content">
             <span style="color:#888;">
@@ -49,10 +65,10 @@
             </span>
         </div>
     </div>
-    <div id="view-branching" class="active" style="padding-top:3.5em;">
+    <div id="view-branching" class="active">
         <div id="graph"></div>
     </div>
-    <div id="view-list" style="display:none;padding-top:3.5em;">
+    <div id="view-list" style="display:none;">
         <div style="display:flex;align-items:center;gap:1em;margin-bottom:1em;">
             <input id="list-search" type="text" placeholder="搜索程序 ID…" aria-label="搜索程序 ID" style="font-size:1em;padding:0.4em 1em;border-radius:6px;border:1px solid #ccc;min-width:220px;">
             <select id="list-sort" style="font-size:1em;padding:0.3em 1em;border-radius:6px;border:1px solid #ccc;">
@@ -64,8 +80,8 @@
         </div>
         <div id="node-list-container"></div>
     </div>
-    <div id="view-performance" style="padding-top:4.5em;"></div>
-    <div id="view-prompts" style="padding-top:3.5em;"></div>
+    <div id="view-performance"></div>
+    <div id="view-prompts"></div>
     <script type="module" src="{{ url_for('static', filename='js/state.js') }}"></script>
     <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
     <script type="module" src="{{ url_for('static', filename='js/mainUI.js') }}"></script>
@@ -73,5 +89,6 @@
     <script type="module" src="{{ url_for('static', filename='js/graph.js') }}"></script>
     <script type="module" src="{{ url_for('static', filename='js/performance.js') }}"></script>
     <script type="module" src="{{ url_for('static', filename='js/list.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/launch-dialog.js') }}" defer></script>
 </body>
 </html>

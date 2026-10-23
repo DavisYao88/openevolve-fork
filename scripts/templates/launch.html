@@ -12,11 +12,12 @@
       <div>
         <p class="eyebrow">OpenEvolve</p>
         <h1>配置进化任务</h1>
-        <p class="intro">编辑初始程序、评测器和参数，启动进化后可在可视化页面查看结果。</p>
+        <p class="intro">填写提示词、初始程序、评估器代码和进化轮数，然后启动任务。</p>
       </div>
       <nav class="page-nav" aria-label="OpenEvolve pages">
         <a href="/">进化可视化</a>
         <a href="/manual">人工反馈</a>
+        <a href="/runs">任务列表</a>
         <a href="/launch" aria-current="page">新建进化</a>
       </nav>
     </header>
@@ -25,57 +26,30 @@
       进化任务会在本机执行 Python 代码，请只运行可信的程序和评测器。本页面仅允许本机浏览器访问。
     </div>
 
-    <section class="import-panel">
-      <h2>导入实验文件</h2>
-      <p class="help">选择实验 YAML（包含 <code>experiment.task_description</code> 和 <code>experiment.max_iterations</code>）及初始程序 .py 文件，可自动填入任务名、任务描述、轮数和初始代码。</p>
-      <div class="import-fields">
-        <label for="experiment-file">实验配置（YAML）</label>
-        <input id="experiment-file" type="file" accept=".yaml,.yml,text/yaml"/>
-        <label for="program-file">初始程序（Python）</label>
-        <input id="program-file" type="file" accept=".py,text/x-python"/>
-        <button id="import-button" class="secondary" type="button">导入并填充表单</button>
-      </div>
-      <p id="import-message" class="import-message" role="status" aria-live="polite"></p>
-      <p class="help">注意：实验文件中的 evaluator 字段不会自动生成评测器。请在下方粘贴能运行实际训练与评分逻辑的 evaluator.py。</p>
-    </section>
-
     <form id="run-form">
       <section class="field">
-        <label for="run-name">任务名称</label>
-        <input id="run-name" name="run_name" type="text" placeholder="例如：仓店出库量参数优化"/>
-        <p class="help">用于生成任务目录名；留空时使用时间戳。</p>
+        <label for="prompt">任务提示词（Markdown）</label>
+        <p class="help">输入本次进化任务的目标、约束和评分说明。</p>
+        <textarea id="prompt" name="prompt" spellcheck="false" required>{{ prompt }}</textarea>
       </section>
 
       <section class="field">
         <label for="initial-program">初始程序代码</label>
-        <p class="help">这是 OpenEvolve 用来开始进化的种子程序。请保留评测器要求的函数入口。</p>
+        <p class="help">作为 OpenEvolve 的种子程序；本次任务会使用副本，不会修改源文件。</p>
         <textarea id="initial-program" name="initial_program" spellcheck="false" required>{{ initial_program }}</textarea>
       </section>
 
       <section class="field">
-        <label for="evaluator">评测器代码</label>
-        <p class="help">评测候选程序并返回指标。可以通过下方参数让评测器读取本地数据集。</p>
+        <label for="evaluator">训练评估脚本代码</label>
+        <p class="help">必须提供真实可运行的训练评估脚本：接收候选 init.py 路径，并向标准输出返回包含 wmape、bias_ratio 的 JSON。本次任务会自动把它配置为 runner_command。</p>
         <textarea id="evaluator" name="evaluator" spellcheck="false" required>{{ evaluator }}</textarea>
       </section>
 
-      <div class="form-grid">
-        <section class="field">
-          <label for="config">配置文件（YAML）</label>
-          <textarea id="config" name="config" spellcheck="false">{{ config }}</textarea>
-        </section>
-        <div class="side-fields">
-          <section class="field">
-            <label for="iterations">进化轮数</label>
-            <input id="iterations" name="iterations" type="number" min="1" value="10" required/>
-          </section>
-          <section class="field">
-            <label for="evaluator-args">评测器参数（JSON 对象）</label>
-            <p class="help">例如：{"data_path":"data/input.csv"}</p>
-            <textarea id="evaluator-args" name="evaluator_args" class="short-editor" spellcheck="false" placeholder="{}"></textarea>
-          </section>
-          <button id="start-button" class="primary" type="submit">开始进化</button>
-        </div>
-      </div>
+      <section class="field">
+        <label for="iterations">进化轮数</label>
+        <input id="iterations" name="iterations" type="number" min="1" value="{{ iterations }}" required/>
+      </section>
+      <button id="start-button" class="primary" type="submit">开始进化</button>
     </form>
 
     <section id="run-status" class="status-panel" aria-live="polite">

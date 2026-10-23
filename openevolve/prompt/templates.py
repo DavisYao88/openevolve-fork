@@ -39,25 +39,14 @@ Suggest improvements to the program that will lead to better performance on the 
 
 You MUST use the exact SEARCH/REPLACE diff format shown below to indicate changes:
 
-<<<<<<< SEARCH
-# Original code to find and replace (must match exactly)
-=======
 # New replacement code
->>>>>>> REPLACE
 
 Example of valid diff format:
-<<<<<<< SEARCH
-for i in range(m):
-    for j in range(p):
-        for k in range(n):
-            C[i, j] += A[i, k] * B[k, j]
-=======
 # Reorder loops for better memory access pattern
 for i in range(m):
     for k in range(n):
         for j in range(p):
             C[i, j] += A[i, k] * B[k, j]
->>>>>>> REPLACE
 
 You can suggest multiple changes. Each SEARCH section must exactly match code in the current program.
 Be thoughtful about your changes and explain your reasoning thoroughly.
@@ -201,11 +190,12 @@ class TemplateManager:
         if not directory.exists():
             return
 
-        # Load .txt templates
-        for txt_file in directory.glob("*.txt"):
-            template_name = txt_file.stem
-            with open(txt_file, "r") as f:
-                self.templates[template_name] = f.read()
+        # Load text templates; Markdown files can hold longer system prompts.
+        for pattern in ("*.txt", "*.md"):
+            for template_file in directory.glob(pattern):
+                template_name = template_file.stem
+                with open(template_file, "r", encoding="utf-8") as f:
+                    self.templates[template_name] = f.read()
 
         # Load fragments.json if exists
         fragments_file = directory / "fragments.json"
