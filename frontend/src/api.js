@@ -33,6 +33,9 @@ export const api = {
   runLog(runId, offset = 0) {
     return request(`/api/runs/${encodeURIComponent(runId)}/log?offset=${offset}`);
   },
+  runInputFile(runId, name) {
+    return request(`/api/runs/${encodeURIComponent(runId)}/input/${encodeURIComponent(name)}`);
+  },
   runCheckpoints(runId) {
     return request(`/api/runs/${encodeURIComponent(runId)}/checkpoints`);
   },

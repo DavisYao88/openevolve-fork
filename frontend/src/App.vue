@@ -19,7 +19,7 @@ onMounted(() => {
 <template>
   <div class="app-shell">
     <header class="app-header">
-      <RouterLink class="brand" to="/">
+      <RouterLink class="brand" to="/runs">
         <span class="brand-mark">O</span>
         <span>
           <strong>OpenEvolve</strong>
@@ -27,12 +27,8 @@ onMounted(() => {
         </span>
       </RouterLink>
       <nav class="main-nav" aria-label="主导航">
-        <RouterLink to="/" :class="{ active: route.path === '/' || route.path.startsWith('/program/') }">
-          可视化
-        </RouterLink>
+        <RouterLink to="/runs" :class="{ active: route.path.startsWith('/runs') }">任务列表</RouterLink>
         <RouterLink to="/manual" :class="{ active: route.path === '/manual' }">人工反馈</RouterLink>
-        <RouterLink to="/launch" :class="{ active: route.path === '/launch' }">新建进化</RouterLink>
-        <RouterLink to="/runs" :class="{ active: route.path === '/runs' }">任务列表</RouterLink>
       </nav>
       <button class="theme-button" type="button" :aria-pressed="darkMode" @click="applyTheme(!darkMode)">
         {{ darkMode ? "☾ 深色" : "☀ 浅色" }}

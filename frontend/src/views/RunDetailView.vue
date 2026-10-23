@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { api } from "../api";
 
@@ -15,6 +15,8 @@ const acting = ref(false);
 const logText = ref("");
 const logSize = ref(0);
 const logEof = ref(true);
+const logPanel = ref(null);
+const autoScroll = ref(true);
 let logOffset = 0;
 let detailTimer;
 let logTimer;
@@ -30,13 +32,30 @@ const progressPercent = computed(() => {
   const total = value.total_iterations || 0;
   return total ? Math.min(100, ((value.finished_iterations || 0) / total) * 100) : 0;
 });
-const islands = computed(() => progress.value.islands || []);
-const iterations = computed(() => progress.value.iterations || []);
+const iterations = computed(() => {
+  const list = detail.value?.iteration_details ?? detail.value?.iterations;
+  return Array.isArray(list) ? list : [];
+});
 const lastIteration = computed(() => (iterations.value.length ? iterations.value[iterations.value.length - 1] : null));
 const inputFiles = computed(() => detail.value?.input_files || {});
 const isRunning = computed(() => progress.value.status === "running");
 const bestScore = computed(() => detail.value?.best_metrics?.combined_score ?? null);
 const resumedFrom = computed(() => detail.value?.resumed_from || "");
+const plannedIterations = computed(() => detail.value?.planned_iterations ?? detail.value?.total_iterations ?? 0);
+const templateLabel = computed(() => detail.value?.template_name || detail.value?.template || "自定义");
+
+function programLink(id) {
+  return { path: `/program/${encodeURIComponent(id)}`, query: { run_id: runId.value } };
+}
+
+function durationText(item) {
+  return Number.isFinite(item?.duration_seconds) ? `${item.duration_seconds.toFixed(1)}s` : "—";
+}
+
+function tokenText(item) {
+  const tokens = item?.tokens || {};
+  return `${tokens.total ?? 0}`;
+}
 
 async function loadDetail() {
   try {
@@ -102,6 +121,29 @@ function openCheckpoint(name) {
   return { path: "/", query: { run_id: runId.value, checkpoint: name } };
 }
 
+const preview = ref(null);
+
+async function previewFile(name) {
+  preview.value = { name, content: "", loading: true, truncated: false, size: 0, error: "" };
+  try {
+    const response = await api.runInputFile(runId.value, name);
+    preview.value = { name, ...response, loading: false, error: "" };
+  } catch (cause) {
+    preview.value = { name, content: "", loading: false, truncated: false, size: 0, error: cause.message };
+  }
+}
+
+function closePreview() {
+  preview.value = null;
+}
+
+watch(logText, async () => {
+  if (!autoScroll.value) return;
+  await nextTick();
+  const panel = logPanel.value;
+  if (panel) panel.scrollTop = panel.scrollHeight;
+});
+
 onMounted(() => {
   loadDetail();
   loadCheckpoints();
@@ -160,30 +202,17 @@ onUnmounted(() => {
           <template v-if="lastIteration.stage"> · 阶段 {{ stageLabels[lastIteration.stage] || lastIteration.stage }}</template>
           <template v-if="lastIteration.error"> · {{ lastIteration.error }}</template>
         </p>
-
-        <div v-if="islands.length" class="island-grid">
-          <article v-for="island in islands" :key="island.index" class="island-card">
-            <header><strong>岛屿 {{ island.index }}</strong><span>第 {{ island.generation }} 代</span></header>
-            <div class="island-stats">
-              <div><small>程序</small><b>{{ island.programs }}</b></div>
-              <div><small>最高分</small><b>{{ Number(island.best_score).toFixed(4) }}</b></div>
-              <div><small>平均分</small><b>{{ Number(island.avg_score).toFixed(4) }}</b></div>
-              <div><small>多样性</small><b>{{ Number(island.diversity).toFixed(2) }}</b></div>
-            </div>
-            <p v-if="island.best_program_id" class="island-best">最优 <code>{{ island.best_program_id }}</code></p>
-          </article>
-        </div>
       </section>
 
       <div class="detail-grid">
         <section class="card">
           <h2 class="card-title">任务信息</h2>
           <dl class="info-list">
-            <div><dt>模板</dt><dd>{{ detail.template_name || "—" }}</dd></div>
+            <div><dt>模板</dt><dd>{{ templateLabel }}</dd></div>
             <div><dt>模型</dt><dd class="mono">{{ detail.model || "—" }}</dd></div>
-            <div><dt>计划轮数</dt><dd>{{ detail.iterations || "—" }}</dd></div>
+            <div><dt>计划轮数</dt><dd>{{ plannedIterations || "—" }}</dd></div>
             <div><dt>输出目录</dt><dd class="mono">{{ detail.output_dir || "—" }}</dd></div>
-            <div><dt>续跑来源</dt><dd class="mono">{{ resumedFrom || "—" }}</dd></div>
+            <div v-if="resumedFrom"><dt>续跑来源</dt><dd class="mono">{{ resumedFrom }}</dd></div>
             <div><dt>更新时间</dt><dd>{{ detail.updated_at || "—" }}</dd></div>
           </dl>
         </section>
@@ -213,8 +242,44 @@ onUnmounted(() => {
         </section>
       </div>
 
+      <section class="card">
+        <h2 class="card-title">每轮明细
+          <span class="log-size">共 {{ iterations.length }} 轮</span>
+        </h2>
+        <p v-if="!iterations.length" class="empty-hint">日志里还没有解析到完成的轮次。</p>
+        <div v-else class="table-scroll">
+          <table class="iteration-table">
+            <thead>
+              <tr><th>轮次</th><th>状态</th><th>程序</th><th>父程序</th><th>耗时</th><th>token</th><th>指标</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in iterations" :key="item.iteration">
+                <td>{{ item.iteration }}</td>
+                <td>
+                  <span class="iteration-state" :class="item.status">{{ item.status === "completed" ? "成功" : "失败" }}</span>
+                </td>
+                <td class="mono">
+                  <RouterLink v-if="item.program_id" :to="programLink(item.program_id)">{{ item.program_id.slice(0, 8) }}</RouterLink>
+                  <span v-else>—</span>
+                </td>
+                <td class="mono">
+                  <RouterLink v-if="item.parent_id" :to="programLink(item.parent_id)">{{ item.parent_id.slice(0, 8) }}</RouterLink>
+                  <span v-else>—</span>
+                </td>
+                <td>{{ durationText(item) }}</td>
+                <td>{{ tokenText(item) }}</td>
+                <td class="mono metrics-cell">{{ item.metrics_text || item.error || "—" }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="card log-card">
-        <h2 class="card-title">运行日志<span class="log-size">{{ (logSize / 1024).toFixed(1) }} KB</span></h2>
+        <h2 class="card-title">运行日志
+          <span class="log-size">{{ (logSize / 1024).toFixed(1) }} KB</span>
+          <label class="log-scroll"><input v-model="autoScroll" type="checkbox">自动滚动</label>
+        </h2>
         <pre ref="logPanel" class="log-view">{{ logText || "暂无日志" }}</pre>
       </section>
     </template>
@@ -242,7 +307,17 @@ onUnmounted(() => {
 .progress-stats small, .info-list dt, .island-stats small { color:var(--muted); font-size:10px; }
 .progress-stats strong { font-size:12px; overflow-wrap:anywhere; }
 .progress-last { margin:12px 0 0; color:#57647a; font-size:11px; overflow-wrap:anywhere; }
-.island-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; margin-top:14px; }
+.table-scroll { max-height:340px; overflow:auto; }
+.iteration-table { width:100%; border-collapse:collapse; font-size:11px; }
+.iteration-table th { position:sticky; top:0; padding:7px 8px; border-bottom:1px solid var(--line); background:#f8f9fc; color:#78849a; font-size:10px; text-align:left; }
+.iteration-table td { padding:7px 8px; border-bottom:1px solid #f0f2f6; vertical-align:middle; }
+.iteration-table tbody tr:hover { background:#fafbfe; }
+.iteration-table a { color:var(--accent); text-decoration:none; }
+.iteration-table a:hover { text-decoration:underline; }
+.metrics-cell { max-width:230px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.iteration-state { padding:3px 7px; border-radius:100px; background:#eef1f5; color:#68748a; font-size:9px; font-weight:700; }
+.iteration-state.completed { background:#e7f7ef; color:#178454; }
+.iteration-state.failed { background:#fff0f0; color:#c14242; }
 .island-card { padding:12px; border:1px solid var(--line); border-radius:10px; background:#fafbfe; }
 .island-card header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
 .island-card header strong { font-size:12px; }
@@ -270,6 +345,8 @@ onUnmounted(() => {
 .file-state.missing { background:#fff0f0; color:#c14242; }
 .log-card { margin-top:16px; }
 .log-size { margin-left:8px; color:var(--muted); font-weight:400; font-size:11px; }
+.log-scroll { margin-left:12px; color:var(--muted); font-weight:400; font-size:11px; }
+.log-scroll input { accent-color:var(--accent); }
 .log-view { max-height:52vh; margin:0; overflow:auto; padding:12px; border-radius:8px; background:#172033; color:#d7e0f1; font:10px/1.5 "IBM Plex Mono",monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
 .empty-hint { margin:0; color:var(--muted); font-size:11px; }
 </style>

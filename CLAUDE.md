@@ -92,7 +92,14 @@ tasks need no evaluator code:
   objective/validation into `evaluator.evaluator_args`.
 - `scripts/visualizer.py`: `TEMPLATE_DIR` drives `/api/launch` (template list +
   contents) and `/api/run` (`template`, `task_name`, optional `objective` /
-  `validation` overrides). Each run also writes `input/task.json`.
+  `validation` overrides, optional `resume_from`). Each run also writes
+  `input/task.json`.
+- Run control endpoints: `GET /api/data[?run_id&checkpoint=]` (also returns
+  `checkpoints` and MAP-Elites `feature_maps`), `GET /api/runs/<id>/checkpoints`,
+  `POST /api/runs/<id>/cancel` (kills the child process group), and
+  `POST /api/runs/<id>/export` (static HTML snapshot). Tasks may run
+  concurrently; `active_runs` maps run id -> process and is reaped by
+  `_reap_finished_runs()`.
 
 ### Key Architectural Patterns
 

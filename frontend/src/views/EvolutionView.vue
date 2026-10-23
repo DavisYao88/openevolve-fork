@@ -1,6 +1,6 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 
 const route = useRoute();
@@ -9,14 +9,16 @@ const data = ref({ archive: [], nodes: [], edges: [], checkpoint_dir: "", checkp
 const selectedId = ref("");
 const metric = ref(localStorage.getItem("openevolve.metric") || "");
 const highlight = ref("top");
-const view = ref("tree");
+const viewOptions = ["tree", "trend", "list", "map"];
+const view = ref(viewOptions.includes(route.query.view) ? route.query.view : "tree");
 const selectedCheckpoint = ref("");
+const progressOpen = ref(false);
 const zoom = ref(1);
 const panX = ref(0);
 const panY = ref(0);
-const showIslands = ref(false);
+const showIslands = ref(true);
 const search = ref("");
-const sort = ref("generation");
+const sort = ref("score");
 const loading = ref(true);
 const error = ref("");
 const progress = ref(null);
@@ -106,6 +108,18 @@ watch(
 );
 
 watch(selectedCheckpoint, () => loadData());
+
+watch(
+  () => route.query.view,
+  (value) => {
+    if (viewOptions.includes(value)) view.value = value;
+  },
+);
+
+function setView(value) {
+  view.value = value;
+  router.replace({ query: { ...route.query, view: value } });
+}
 const statusLabels = { running: "运行中", completed: "已完成", failed: "失败", interrupted: "已中断", pending: "等待启动" };
 const stageLabels = { llm: "模型生成", diff: "差异应用", evaluation: "评测" };
 const progressPercent = computed(() => {
@@ -179,6 +193,55 @@ function scoreLabel(node) {
   return Number.isFinite(score) ? score.toFixed(3) : "N/A";
 }
 
+const metricRanges = computed(() => {
+  const ranges = {};
+  for (const node of nodes.value) {
+    for (const [name, value] of Object.entries(node.metrics || {})) {
+      if (typeof value !== "number" || !Number.isFinite(value)) continue;
+      const range = ranges[name] || (ranges[name] = { min: Infinity, max: -Infinity });
+      range.min = Math.min(range.min, value);
+      range.max = Math.max(range.max, value);
+    }
+  }
+  return ranges;
+});
+
+function numericMetrics(node) {
+  return Object.entries(node.metrics || {})
+    .filter(([name, value]) => name !== activeMetric.value)
+    .filter(([, value]) => typeof value === "number" && Number.isFinite(value));
+}
+
+function formatMetric(value) {
+  return value.toFixed(4);
+}
+
+function barRatio(node, name) {
+  const value = node.metrics?.[name];
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  const range = metricRanges.value[name];
+  if (!range) return 0;
+  if (range.max === range.min) return 1;
+  return Math.max(0, Math.min(1, (value - range.min) / (range.max - range.min)));
+}
+
+function scoreRatio(value) {
+  const range = metricRanges.value[activeMetric.value];
+  if (typeof value !== "number" || !Number.isFinite(value) || !range) return 0;
+  if (range.max === range.min) return 1;
+  return Math.max(0, Math.min(1, (value - range.min) / (range.max - range.min)));
+}
+
+function metricScale(name) {
+  const range = metricRanges.value[name];
+  if (!range) return { min: "0.00", max: "1.00" };
+  return { min: Number(range.min).toFixed(2), max: Number(range.max).toFixed(2) };
+}
+
+function barColor(ratio) {
+  return `hsl(213 72% ${Math.round(62 - ratio * 22)}%)`;
+}
+
 async function loadData() {
   try {
     error.value = "";
@@ -208,6 +271,37 @@ async function loadProgress() {
 
 function selectNode(id) {
   selectedId.value = id;
+}
+
+const listContainer = ref(null);
+
+async function scrollToIndex(index) {
+  await nextTick();
+  const rows = listContainer.value?.querySelectorAll(".program-row");
+  if (rows && index >= 0 && index < rows.length) {
+    rows[index].scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+}
+
+async function moveToNode(id) {
+  selectedId.value = id;
+  await scrollToIndex(visibleNodes.value.findIndex((node) => node.id === id));
+}
+
+async function moveSelection(offset) {
+  if (!visibleNodes.value.length) return;
+  const current = visibleNodes.value.findIndex((node) => node.id === selectedId.value);
+  const next = current === -1
+    ? 0
+    : Math.min(visibleNodes.value.length - 1, Math.max(0, current + offset));
+  selectedId.value = visibleNodes.value[next].id;
+  await scrollToIndex(next);
+}
+
+function onListKeydown(event) {
+  if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
+  event.preventDefault();
+  moveSelection(event.key === "ArrowUp" ? -1 : 1);
 }
 
 function openProgram(node) {
@@ -262,7 +356,7 @@ onUnmounted(() => {
         <p>{{ route.query.run_id ? `任务 ${route.query.run_id}` : (data.checkpoint_dir || "等待检查点数据") }}</p>
       </div>
       <div class="view-switch">
-        <button v-for="item in [['tree','进化树'],['trend','性能趋势'],['list','程序列表'],['map','特征地图']]" :key="item[0]" class="button" :class="{ selected: view === item[0] }" @click="view = item[0]">{{ item[1] }}</button>
+        <button v-for="item in [['tree','进化树'],['trend','性能趋势'],['list','程序列表'],['map','特征地图']]" :key="item[0]" class="button" :class="{ selected: view === item[0] }" @click="setView(item[0])">{{ item[1] }}</button>
       </div>
     </div>
 
@@ -299,7 +393,12 @@ onUnmounted(() => {
           <p class="eyebrow">Run Progress</p>
           <h2>{{ runId }}</h2>
         </div>
-        <span class="status-badge" :class="progress.status">{{ statusLabels[progress.status] || progress.status }}</span>
+        <div class="progress-head-right">
+          <span class="status-badge" :class="progress.status">{{ statusLabels[progress.status] || progress.status }}</span>
+          <button class="button progress-toggle" :aria-expanded="progressOpen" @click="progressOpen = !progressOpen">
+            {{ progressOpen ? "收起详情" : "展开详情" }} {{ progressOpen ? "▴" : "▾" }}
+          </button>
+        </div>
       </div>
       <div class="progress-bar-track" role="progressbar" :aria-valuenow="progressPercent" aria-valuemin="0" aria-valuemax="100">
         <div class="progress-bar-fill" :class="progress.status" :style="{ width: `${progressPercent}%` }"></div>
@@ -321,28 +420,38 @@ onUnmounted(() => {
         正在运行。检查点按固定轮次间隔保存，生成之前下方图表不会出现程序节点。
       </p>
 
-      <div v-if="islands.length" class="island-grid">
-        <article v-for="island in islands" :key="island.index" class="island-card">
-          <header><strong>岛屿 {{ island.index }}</strong><span>第 {{ island.generation }} 代</span></header>
-          <div class="island-stats">
-            <div><small>程序</small><b>{{ island.programs }}</b></div>
-            <div><small>最高分</small><b>{{ Number(island.best_score).toFixed(4) }}</b></div>
-            <div><small>平均分</small><b>{{ Number(island.avg_score).toFixed(4) }}</b></div>
-            <div><small>多样性</small><b>{{ Number(island.diversity).toFixed(2) }}</b></div>
-          </div>
-          <p v-if="island.best_program_id" class="island-best">最优 <code>{{ island.best_program_id }}</code></p>
-        </article>
-      </div>
+      <div v-if="progressOpen">
+        <div v-if="islands.length" class="island-grid">
+          <article v-for="island in islands" :key="island.index" class="island-card">
+            <header><strong>岛屿 {{ island.index }}</strong><span>第 {{ island.generation }} 代</span></header>
+            <div class="island-stats">
+              <div><small>程序</small><b>{{ island.programs }}</b></div>
+              <div><small>最高分</small><b>{{ Number(island.best_score).toFixed(4) }}</b></div>
+              <div><small>平均分</small><b>{{ Number(island.avg_score).toFixed(4) }}</b></div>
+              <div><small>多样性</small><b>{{ Number(island.diversity).toFixed(2) }}</b></div>
+            </div>
+            <p v-if="island.best_program_id" class="island-best">最优 <code>{{ island.best_program_id }}</code></p>
+          </article>
+        </div>
 
-      <details v-if="logTail.length" class="log-panel" open>
-        <summary>运行日志（最近 {{ logTail.length }} 行）</summary>
-        <pre>{{ logTail.join("\n") }}</pre>
-      </details>
+        <details v-if="logTail.length" class="log-panel">
+          <summary>运行日志（最近 {{ logTail.length }} 行）</summary>
+          <pre>{{ logTail.join("\n") }}</pre>
+        </details>
+      </div>
     </section>
 
     <p v-if="error" class="message error">{{ error }}</p>
     <div v-else-if="loading" class="card empty-state">正在读取进化数据…</div>
-    <div v-else-if="!nodes.length" class="card empty-state">当前没有可视化数据。启动任务后，检查点会自动显示在这里。</div>
+    <div v-else-if="!nodes.length" class="card empty-state">
+      <p><strong>当前没有可可视化的检查点数据。</strong></p>
+      <p v-if="runId" class="empty-hint">任务 {{ runId }} 还没有生成 checkpoint。检查点按固定轮次间隔保存，第一轮结束前这里不会有节点；若任务已经失败或被中断，也不会有数据。</p>
+      <p v-else class="empty-hint">没有指定任务。请从任务列表点「查看」进入某个任务的可视化。</p>
+      <div class="empty-actions">
+        <RouterLink class="button" to="/runs">返回任务列表</RouterLink>
+        <RouterLink v-if="runId" class="button" :to="{ path: `/runs/${runId}` }">查看任务详情与日志</RouterLink>
+      </div>
+    </div>
 
     <div v-else-if="view === 'tree'" class="workspace">
       <section class="card chart-card">
@@ -428,23 +537,43 @@ onUnmounted(() => {
 
     <section v-else class="card list-card">
       <div class="list-toolbar">
-        <input v-model="search" class="text-input" placeholder="搜索程序 ID" aria-label="搜索程序 ID">
+        <input v-model="search" class="text-input" placeholder="搜索程序 ID…" aria-label="搜索程序 ID">
         <select v-model="sort" class="select-input" aria-label="排序方式">
-          <option value="generation">按代数</option><option value="score">按指标</option><option value="island">按岛屿</option><option value="id">按 ID</option>
+          <option value="score">按指标排序</option><option value="generation">按代数</option><option value="island">按岛屿</option><option value="id">按 ID</option>
         </select>
       </div>
       <div class="summary-row">
-        <div><small>最高分</small><strong>{{ bestScore === null ? "—" : bestScore.toFixed(4) }}</strong></div>
-        <div><small>平均分</small><strong>{{ averageScore === null ? "—" : averageScore.toFixed(4) }}</strong></div>
-        <div><small>岛屿</small><strong>{{ islandIds.length }}</strong></div>
+        <div><small>🏆 最高分</small><strong>{{ bestScore === null ? "—" : bestScore.toFixed(4) }}</strong><span class="summary-bar"><i :style="{ width: `${scoreRatio(bestScore) * 100}%` }"></i></span></div>
+        <div><small>📊 平均分</small><strong>{{ averageScore === null ? "—" : averageScore.toFixed(4) }}</strong><span class="summary-bar"><i :style="{ width: `${scoreRatio(averageScore) * 100}%` }"></i></span></div>
+        <div><small>总计</small><strong>{{ nodes.length }} 程序 · {{ maxGeneration + 1 }} 代 · {{ islandIds.length }} 岛屿</strong></div>
         <div><small>结果</small><strong>{{ visibleNodes.length }} / {{ nodes.length }}</strong></div>
       </div>
-      <div class="program-list">
-        <button v-for="node in visibleNodes" :key="node.id" class="program-row" :class="{ active: selectedId === node.id, highlighted: isHighlighted(node) }" @click="selectNode(node.id)">
-          <span class="program-score">{{ scoreLabel(node) }}</span>
-          <span class="program-meta"><strong class="mono">{{ node.id }}</strong><small>第 {{ node.generation ?? "?" }} 代 · 岛屿 {{ node.island ?? "?" }}</small></span>
-          <span class="row-arrow">→</span>
-        </button>
+      <div ref="listContainer" class="program-list" tabindex="0" aria-label="程序列表，可用上下方向键切换" @keydown="onListKeydown">
+        <article v-for="(node, index) in visibleNodes" :key="node.id" class="program-row" :class="{ active: selectedId === node.id, highlighted: isHighlighted(node) }" @click="selectNode(node.id)">
+          <span class="program-rank">#{{ index + 1 }}</span>
+          <div class="program-main">
+            <div class="score-line">
+              <span class="score-name">{{ activeMetric }}:</span>
+              <b class="mono">{{ scoreLabel(node) }}</b>
+              <span class="score-bar"><i :style="{ width: `${barRatio(node, activeMetric) * 100}%`, background: barColor(barRatio(node, activeMetric)) }"></i></span>
+            </div>
+            <dl class="program-facts">
+              <div><dt>ID</dt><dd class="mono">{{ node.id }}</dd></div>
+              <div><dt>代数</dt><dd>{{ node.generation ?? "—" }}</dd></div>
+              <div><dt>岛屿</dt><dd>{{ node.island ?? "—" }}</dd></div>
+              <div><dt>父程序</dt><dd><button v-if="node.parent_id" class="parent-link" title="选择并定位父程序" @click.stop="moveToNode(node.parent_id)">{{ node.parent_id }}</button><span v-else>无</span></dd></div>
+            </dl>
+          </div>
+          <div v-if="numericMetrics(node).length" class="metric-bars">
+            <div v-for="[name, value] in numericMetrics(node)" :key="name" class="metric-bar">
+              <span class="metric-name mono">{{ name }}</span>
+              <span class="metric-value mono">{{ formatMetric(value) }}</span>
+              <span class="metric-track"><i :style="{ width: `${barRatio(node, name) * 100}%`, background: barColor(barRatio(node, name)) }"></i></span>
+              <span class="metric-scale"><em>{{ metricScale(name).min }}</em><em>{{ metricScale(name).max }}</em></span>
+            </div>
+          </div>
+          <button class="button open-window" title="在新窗口打开完整程序页" @click.stop="openProgram(node)">在新窗口打开</button>
+        </article>
       </div>
       <NodeDetail v-if="selected" :node="selected" :nodes="nodes" :archive="data.archive || []" :metric="activeMetric" @close="selectedId = ''" @open="openProgram" />
     </section>
@@ -511,6 +640,8 @@ export default { components: { NodeDetail } };
 <style scoped>
 .run-progress { padding: 16px 18px; margin-bottom: 18px; }
 .progress-head { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+.progress-head-right { display:flex; align-items:center; gap:10px; }
+.progress-toggle { min-height:28px; padding:3px 10px; font-size:11px; }
 .progress-head h2 { margin:2px 0 0; font:600 14px "IBM Plex Mono", monospace; }
 .status-badge { padding:5px 10px; border-radius:100px; background:#eef1f5; color:#68748a; font-size:10px; font-weight:700; }
 .status-badge.completed { background:#e7f7ef; color:#178454; }
@@ -613,7 +744,10 @@ export default { components: { NodeDetail } };
 .map-cell:hover { stroke:#263b79; stroke-width:1.5; }
 .map-cell.chosen { stroke:#e5a02c; stroke-width:2; }
 .map-hint { margin:8px 0 0; color:var(--muted); font-size:10px; }
-.empty-state { padding:0 22px 18px; color:var(--muted); font-size:12px; }
+.empty-state { padding:26px 22px; color:var(--muted); font-size:12px; text-align:center; }
+.empty-state strong { color:#36445c; font-size:13px; }
+.empty-hint { max-width:560px; margin:8px auto 0; line-height:1.7; }
+.empty-actions { display:flex; justify-content:center; gap:10px; margin-top:16px; }
 .list-card { overflow:hidden; }
 .list-toolbar { display:flex; gap:10px; padding:16px; border-bottom:1px solid var(--line); }
 .list-toolbar .text-input { max-width:360px; }
@@ -623,15 +757,35 @@ export default { components: { NodeDetail } };
 .summary-row > div:last-child { border:0; }
 .summary-row small { color:var(--muted); font-size:10px; }
 .summary-row strong { font-size:15px; }
-.program-list { max-height:65vh; overflow:auto; }
-.program-row { display:flex; width:100%; align-items:center; gap:14px; padding:12px 18px; border:0; border-bottom:1px solid #f0f2f6; background:#fff; text-align:left; }
+.program-list { max-height:70vh; overflow:auto; }
+.program-row { display:flex; align-items:flex-start; gap:16px; padding:14px 18px; border-bottom:1px solid #eef1f6; background:#fff; cursor:pointer; }
 .program-row:hover, .program-row.active { background:#f5f7fc; }
-.program-row.highlighted .program-score { color:#a46a0b; }
-.program-score { min-width:70px; color:#315fce; font:600 13px "IBM Plex Mono",monospace; }
-.program-meta { display:flex; min-width:0; flex:1; flex-direction:column; gap:4px; }
-.program-meta strong { overflow:hidden; text-overflow:ellipsis; font-size:11px; }
-.program-meta small { color:var(--muted); font-size:10px; }
-.row-arrow { color:#98a2b3; }
+.program-row.highlighted { box-shadow:inset 3px 0 0 #e59e2d; }
+.program-rank { min-width:34px; padding-top:2px; color:#8792a5; font:700 13px "IBM Plex Mono",monospace; }
+.program-row.highlighted .program-rank { color:#a46a0b; }
+.program-main { display:flex; min-width:220px; flex:1; flex-direction:column; gap:8px; }
+.score-line { display:flex; align-items:center; gap:8px; }
+.score-name { color:var(--muted); font-size:11px; }
+.score-line b { color:#263b79; font-size:13px; }
+.score-bar { overflow:hidden; flex:1; max-width:220px; height:10px; border-radius:100px; background:#e9edf4; }
+.score-bar i { display:block; height:100%; border-radius:100px; }
+.program-facts { display:flex; flex-wrap:wrap; gap:4px 26px; margin:0; }
+.program-facts > div { display:flex; gap:8px; min-width:0; }
+.program-facts dt { color:var(--muted); font-size:11px; }
+.program-facts dd { margin:0; overflow-wrap:anywhere; font-size:11px; }
+.parent-link { border:0; padding:0; background:none; color:#315fce; cursor:pointer; font:inherit; text-decoration:underline; overflow-wrap:anywhere; }
+.metric-bars { display:grid; min-width:260px; flex:0 0 320px; gap:4px; }
+.metric-bar { display:grid; grid-template-columns:minmax(110px,1fr) 52px 100px; align-items:center; gap:2px 8px; }
+.metric-scale { display:flex; grid-column:3; grid-row:2; justify-content:space-between; color:#9aa4b6; font-size:9px; font-style:normal; }
+.metric-scale em { font-style:normal; }
+.metric-name { overflow:hidden; color:#58667d; font-size:10px; text-overflow:ellipsis; white-space:nowrap; text-align:right; }
+.metric-value { color:#263b79; font-size:10px; text-align:right; }
+.metric-track { overflow:hidden; height:8px; border-radius:100px; background:#e9edf4; }
+.metric-track i { display:block; height:100%; border-radius:100px; }
+.open-window { flex:none; min-height:28px; padding:4px 9px; font-size:10px; }
+@media(max-width:960px) { .program-row { flex-wrap:wrap; } .metric-bars { flex:1 1 100%; min-width:0; } .open-window { margin-left:auto; } }
+.summary-bar { overflow:hidden; display:block; height:8px; margin-top:2px; border-radius:100px; background:#e9edf4; }
+.summary-bar i { display:block; height:100%; border-radius:100px; background:#315fce; }
 .list-card > .node-detail { border-top:1px solid var(--line); }
 @media(max-width:1000px) { .workspace { grid-template-columns:1fr; } .detail-card { position:static; } }
 @media(max-width:640px) {

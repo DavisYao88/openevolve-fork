@@ -36,6 +36,21 @@ GLOBAL_CONFIG_PATH = GUI_RUNS_DIR / "global_config.yml"
 STALE_RUN_SECONDS = 15 * 60
 current_run: Optional[dict[str, Any]] = None
 run_lock = threading.Lock()
+# Every task started from this service, keyed by run id. Tasks may run
+# concurrently; the registry is only used to terminate them on request.
+active_runs: dict[str, dict[str, Any]] = {}
+
+
+def _reap_finished_runs() -> None:
+    """Drop finished tasks from the registry and record their exit code."""
+    for run_id in list(active_runs):
+        run = active_runs[run_id]
+        return_code = run["process"].poll()
+        if return_code is None:
+            continue
+        run["status"] = "completed" if return_code == 0 else "failed"
+        run["return_code"] = return_code
+        del active_runs[run_id]
 
 
 def find_latest_checkpoint(base_folder):
@@ -217,6 +232,9 @@ def _run_summary(run_dir):
         "resumed_from": task_manifest.get("resumed_from") or "",
         "run_dir": run_dir_display,
         "output_dir": Path(os.path.relpath(output_dir, PROJECT_ROOT)).as_posix(),
+        # `iterations` 在详情接口里会被 _run_progress 的“每轮明细”覆盖，
+        # 因此计划轮数另外用 planned_iterations 暴露给 UI。
+        "planned_iterations": iterations,
         "iterations": iterations,
         "programs": _read_run_generation(run_dir),
         "best_metrics": best_metrics,
@@ -949,6 +967,7 @@ def run_api():
         abort(403)
 
     if request.method == "GET":
+        _reap_finished_runs()
         return jsonify({"run": _current_run_status()})
 
     if not request.is_json or request.headers.get("X-Requested-With") != "XMLHttpRequest":
@@ -1029,8 +1048,7 @@ def run_api():
     if not run_lock.acquire(blocking=False):
         return jsonify({"error": "正在启动另一个任务，请稍后再试。"}), 409
     try:
-        if current_run is not None and current_run["process"].poll() is None:
-            return jsonify({"error": "已有进化任务正在运行。"}), 409
+        _reap_finished_runs()
 
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         run_id = f"evolve_task_{timestamp}"
@@ -1120,6 +1138,7 @@ def run_api():
             "output_dir": str(output_dir),
             "log_path": str(log_path),
         }
+        active_runs[run_id] = current_run
         return jsonify({"run": _current_run_status()}), 202
     finally:
         run_lock.release()
@@ -1136,6 +1155,7 @@ def runs_page():
 def runs_api():
     if not _is_local_request():
         abort(403)
+    _reap_finished_runs()
     return jsonify({"runs": _list_runs()})
 
 
@@ -1160,20 +1180,49 @@ def run_detail_api(run_id):
     progress = _run_progress(run_dir)
     detail = _run_summary(run_dir)
     detail.update(progress)
+    # progress["iterations"] 是每轮明细数组，会覆盖计划轮数；
+    # 这里保留两个语义清晰的键供 UI 使用。
+    detail["iteration_details"] = progress["iterations"]
 
     input_dir = run_dir / "input"
     detail["input_files"] = {
         name: (input_dir / name).is_file()
-        for name in (
-            "init.py",
-            "prompt.md",
-            "runner_adapter.py",
-            "evaluator_callback.py",
-            "config.yaml",
-            "task.json",
-        )
+        for name in _INPUT_FILE_NAMES
     }
     return jsonify({"run": detail})
+
+
+_INPUT_FILE_NAMES = (
+    "init.py",
+    "prompt.md",
+    "runner_adapter.py",
+    "evaluator_callback.py",
+    "config.yaml",
+    "task.json",
+)
+
+
+@app.route("/api/runs/<run_id>/input/<name>")
+def run_input_file_api(run_id, name):
+    """Return the text content of one saved input file for preview."""
+    if not _is_local_request():
+        abort(403)
+    run_dir = _resolve_run_dir(run_id)
+    if run_dir is None:
+        return jsonify({"error": f"找不到任务：{run_id}"}), 404
+    if name not in _INPUT_FILE_NAMES:
+        return jsonify({"error": "不支持的文件。"}), 400
+    path = run_dir / "input" / name
+    if not path.is_file():
+        return jsonify({"error": "文件不存在。"}), 404
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as error:
+        return jsonify({"error": f"读取失败：{error}"}), 500
+    truncated = len(text) > 200_000
+    if truncated:
+        text = text[:200_000]
+    return jsonify({"name": name, "size": path.stat().st_size, "truncated": truncated, "content": text})
 
 
 @app.route("/api/runs/<run_id>/log")
@@ -1242,8 +1291,11 @@ def run_cancel_api(run_id):
     if run_dir is None:
         return jsonify({"error": f"找不到任务：{run_id}"}), 404
 
-    run = current_run
-    if run is None or run.get("id") != run_id:
+    _reap_finished_runs()
+    run = active_runs.get(run_id)
+    if run is None and current_run is not None and current_run.get("id") == run_id:
+        run = current_run
+    if run is None:
         return jsonify({"error": "该任务不是由本服务启动，或已经结束。"}), 409
 
     process = run["process"]
@@ -1347,8 +1399,10 @@ def data():
     logger.debug(f"Data: {data}")
     if run_dir is not None:
         data["checkpoints"] = _list_checkpoints(run_dir)
+        resolved_root = str(_checkpoints_root(run_dir).resolve())
+        resolved_dir = str(Path(checkpoint_dir).resolve()) if checkpoint_dir else ""
         data["selected_checkpoint"] = (
-            Path(checkpoint_dir).name if str(checkpoint_dir).startswith(str(_checkpoints_root(run_dir))) else ""
+            Path(checkpoint_dir).name if resolved_dir.startswith(resolved_root) else ""
         )
     return jsonify(data)
 

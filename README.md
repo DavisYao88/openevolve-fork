@@ -952,7 +952,18 @@ evaluator:
 
 ### Standalone Vue 3 frontend
 
-The standalone Vue app in `frontend/` replaces the visualizer, manual-feedback, launch, and run-list pages while reusing the Flask APIs for all backend operations. Start Flask with `python scripts/visualizer.py --host 127.0.0.1 --port 8080`, then in another terminal run `cd frontend && npm install && npm run dev`. Open the Vite URL (normally `http://127.0.0.1:5173`). See [frontend/README.md](frontend/README.md) for the API proxy and production hosting notes.
+页面：可视化 `/`、任务列表 `/runs`、任务详情 `/runs/<id>`、新建进化 `/launch`、程序详情 `/program/<id>`、人工反馈 `/manual`。Start Flask with `python scripts/visualizer.py --host 127.0.0.1 --port 8080`, then in another terminal run `cd frontend && npm install && npm run dev`. Open the Vite URL (normally `http://127.0.0.1:5173`).
+
+运行控制（前端已接，后端 `scripts/visualizer.py`）：
+
+- 任务可并发启动，没有"只能跑一个"的限制；`POST /api/runs/<id>/cancel` 会终止该子进程（进程组 `SIGTERM`），任务被标记为已中断。
+- `POST /api/run` 支持 `resume_from: <任务ID>` 或 `<任务ID>/<检查点名>`，等价于 CLI 的 `--checkpoint`，从已有检查点继续演化。
+- `GET /api/runs/<id>/checkpoints` 列出检查点，`GET /api/data?run_id=…&checkpoint=checkpoint_50` 可查看任意检查点（名字限定在任务自己的 `checkpoints/` 目录内，拒绝路径穿越）。
+- `POST /api/runs/<id>/export` 生成自包含的静态页面到任务目录 `static/`，用 `python3 -m http.server --directory <static_dir> 8080` 打开。
+
+`GET /api/data` 额外返回每个岛屿的 MAP-Elites 网格（`feature_maps`，格子坐标 + fitness + 程序 ID），可视化页的"特征地图"视图据此画热力图。
+
+See [frontend/README.md](frontend/README.md) for the page/API mapping, proxy and production hosting notes.
 
 **Features:**
 

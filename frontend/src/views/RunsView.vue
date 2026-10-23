@@ -2,10 +2,13 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import { RouterLink } from "vue-router";
 import { api } from "../api";
+import LaunchModal from "../components/LaunchModal.vue";
 
 const runs = ref([]);
 const loading = ref(true);
 const error = ref("");
+const showLaunch = ref(false);
+const startedMessage = ref("");
 let timer;
 
 async function loadRuns() {
@@ -20,6 +23,12 @@ async function loadRuns() {
   }
 }
 
+function onStarted(run) {
+  showLaunch.value = false;
+  startedMessage.value = `任务「${run?.name || run?.id}」已启动，正在后台运行。`;
+  loadRuns();
+}
+
 function statusLabel(status) {
   return ({ completed: "已完成", running: "运行中", failed: "失败", interrupted: "已中断", unknown: "未知" })[status] || status;
 }
@@ -30,10 +39,17 @@ onUnmounted(() => window.clearInterval(timer));
 
 <template>
   <section>
-    <div class="page-heading"><div><p class="eyebrow">Evolution Runs</p><h1>任务列表</h1><p>查看由进化工作台创建的任务和结果。</p></div><button class="button" @click="loadRuns">↻ 刷新</button></div>
+    <div class="page-heading">
+      <div><p class="eyebrow">Evolution Runs</p><h1>任务列表</h1><p>查看由进化工作台创建的任务和结果。</p></div>
+      <div class="heading-actions">
+        <button class="button" @click="loadRuns">↻ 刷新</button>
+        <button class="button primary" @click="showLaunch = true">＋ 新建演化</button>
+      </div>
+    </div>
+    <p v-if="startedMessage" class="message">{{ startedMessage }}</p>
     <p v-if="error" class="message error">{{ error }}</p>
     <div v-if="loading" class="card empty-state">正在读取任务…</div>
-    <div v-else-if="!runs.length" class="card empty-state">还没有进化任务。<br><RouterLink class="button primary create-link" to="/launch">新建进化任务</RouterLink></div>
+    <div v-else-if="!runs.length" class="card empty-state">还没有进化任务。<br><button class="button primary create-link" @click="showLaunch = true">新建进化任务</button></div>
     <div v-else class="runs-table card">
       <div class="table-head"><span>任务</span><span>状态</span><span>模型</span><span>轮数 / 程序</span><span>最高分</span><span>更新时间</span><span></span></div>
       <article v-for="run in runs" :key="run.id" class="run-row">
@@ -44,15 +60,17 @@ onUnmounted(() => window.clearInterval(timer));
         </div>
         <span class="status-badge" :class="run.status">{{ statusLabel(run.status) }}</span>
         <span class="run-cell">{{ run.model || "—" }}</span>
-        <span class="run-cell">{{ run.iterations }} / {{ run.programs }}</span>
+        <span class="run-cell">{{ run.planned_iterations ?? run.iterations }} / {{ run.programs }}</span>
         <span class="run-cell mono">{{ run.best_metrics?.combined_score ?? "—" }}</span>
         <span class="run-cell">{{ run.updated_at || "—" }}</span>
         <div class="row-actions">
           <RouterLink class="button open-run" :to="{ path: `/runs/${run.id}` }">详情</RouterLink>
-          <RouterLink class="button open-run" :to="{ path: '/', query: { run_id: run.id } }">可视化</RouterLink>
+          <RouterLink class="button primary open-run" :to="{ path: '/', query: { run_id: run.id } }">查看</RouterLink>
         </div>
       </article>
     </div>
+
+    <LaunchModal v-if="showLaunch" @close="showLaunch = false" @started="onStarted" />
   </section>
 </template>
 
@@ -73,6 +91,7 @@ onUnmounted(() => window.clearInterval(timer));
 .status-badge.completed { background:#e7f7ef; color:#178454; }.status-badge.running { background:#e8efff; color:#315fce; }.status-badge.failed { background:#fff0f0; color:#c14242; }.status-badge.interrupted { background:#fff5dd; color:#946407; }
 .open-run { min-height:30px; padding:4px 9px; font-size:10px; }
 .create-link { margin-top:14px; }
+.heading-actions { display:flex; gap:8px; }
 @media(max-width:1000px) {
   .table-head { display:none; }
   .run-row { grid-template-columns:minmax(0,1fr) auto; gap:10px; }
