@@ -55,3 +55,26 @@ print(json.dumps({"wmape": wmape, "bias_ratio": bias_ratio}))
 `runner_adapter.py` 只是明确报错的接口模板，不会伪造训练结果；请在页面评测
 脚本编辑框里填入真实训练适配器代码。真实适配器未实现时评估会失败，不要把
 失败结果用于调参结论。
+
+## 训练后端（三选一，按优先级解析）
+
+`runner_adapter.py` 本身不实现训练：它「加载候选 PARAMS → 调用训练后端 →
+取 wmape/bias_ratio → stdout 打印一个 JSON」。后端按以下顺序解析：
+
+| 方式 | 设置 | 用途 |
+|------|------|------|
+| 显式入口 | `FAMOU_TRAIN_ENTRY=my_pkg.trainer:run_train` | 任意可调用对象，最灵活 |
+| 内置示例 | `FAMOU_TRAIN_BACKEND=sample` | **仅联通验证**：`sample_backend.py` 是合成响应面，指标不代表业务表现 |
+| 生产链路 | `FAMOU_PRODUCTION_ROOT=/生产项目目录` | 导入 `app.pipelines.train_pipeline.run_train` |
+
+三者都没配置时适配器**直接非零退出**（不会伪造指标）。
+
+示例（只验证链路通畅，不用于调参结论）：
+
+```bash
+FAMOU_TRAIN_BACKEND=sample python runner_adapter.py init.py
+# {"wmape": 0.285938, "bias_ratio": 0.0}     ← 默认配方 125.2 分
+# 接近最优配方时 wmape ≈ 0.085（约 246 分）
+```
+
+因此 `sample_backend.py` 同时是"响应面自检"：进化一旦真的在工作，分数必须上涨。

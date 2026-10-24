@@ -2,11 +2,14 @@ async function request(url, options = {}) {
   const response = await fetch(url, { cache: "no-store", ...options });
   if (!response.ok) {
     const body = await response.text();
-    let message = body;
-    try {
-      message = JSON.parse(body).error || body;
-    } catch {
-      // Keep non-JSON server errors readable.
+    let message = "";
+    if (body) {
+      try {
+        message = JSON.parse(body).error || "";
+      } catch {
+        // 非 JSON 响应（例如旧后端返回的 404 HTML 错误页）不透传原始 HTML。
+        message = /^</.test(body.trim()) ? "" : body.trim();
+      }
     }
     throw new Error(message || `请求失败（${response.status}）`);
   }

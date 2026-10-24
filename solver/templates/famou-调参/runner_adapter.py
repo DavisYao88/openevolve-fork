@@ -61,23 +61,94 @@ def load_parameters(candidate_path: Path) -> Dict[str, Any]:
     return params
 
 
-def run_training(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Run the production training chain and return its summary.
+def _template_dir() -> Path:
+    """Locate the template directory that holds the helper modules.
 
-    Replace the two lines below with the real call. The expected shape is
-    whatever the production pipeline returns; only ``wmape`` and ``bias_ratio``
-    are read by summarize_metrics(), so extra keys are fine.
-
-    Example (shape only -- this repository does not ship the implementation):
-
-        from app.pipelines.train_pipeline import run_train
-        return run_train(params=params, market="DOMESTIC_MARKET",
-                         target="future_1d_box_qty")
+    The adapter is copied into ``evolve_tasks/<task>/input/`` before it runs, so
+    its own directory is not necessarily the template directory.
     """
+    override = os.environ.get("FAMOU_TEMPLATE_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+
+    here = Path(__file__).resolve().parent
+    if (here / "sample_backend.py").is_file():
+        return here
+    for base in (here, *here.parents):
+        guess = base / "solver" / "templates" / "famou-调参"
+        if (guess / "sample_backend.py").is_file():
+            return guess
+    return here
+
+
+def _load_entry(spec: str):
+    """Load a training entry point given as ``module:function``."""
+    module_name, _, func_name = spec.partition(":")
+    if not module_name or not func_name:
+        raise SystemExit(f"FAMOU_TRAIN_ENTRY 格式应为 module:function，收到：{spec!r}")
+    template_dir = str(_template_dir())
+    if template_dir not in sys.path:
+        sys.path.insert(0, template_dir)
+    try:
+        module = importlib.import_module(module_name)
+    except Exception as error:
+        raise SystemExit(f"无法导入训练后端模块 {module_name!r}：{error}")
+    func = getattr(module, func_name, None)
+    if not callable(func):
+        raise SystemExit(f"训练后端 {spec!r} 不是可调用对象")
+    return func
+
+
+def resolve_backend():
+    """Pick the training backend, most explicit source first.
+
+    1. ``FAMOU_TRAIN_ENTRY=module:function`` -- any callable you point at.
+    2. ``FAMOU_TRAIN_BACKEND=sample`` -- the built-in synthetic surrogate.
+       Only useful for wiring checks; its numbers are NOT business metrics.
+    3. ``FAMOU_PRODUCTION_ROOT`` -- real chain: app.pipelines.train_pipeline.run_train.
+    """
+    entry = os.environ.get("FAMOU_TRAIN_ENTRY", "").strip()
+    if entry:
+        return _load_entry(entry), f"entry={entry}"
+
+    backend = os.environ.get("FAMOU_TRAIN_BACKEND", "").strip().lower()
+    if backend in {"sample", "demo", "surrogate"}:
+        func = _load_entry("sample_backend:run_train")
+        print(
+            "[adapter] 警告：正在使用内置示例后端，指标为合成代理值，不代表业务表现。",
+            file=sys.stderr,
+        )
+        return func, "backend=sample (synthetic surrogate, NOT production)"
+
+    if PRODUCTION_ROOT.is_dir():
+        try:
+            from app.pipelines.train_pipeline import run_train  # type: ignore
+        except Exception as error:
+            raise SystemExit(
+                f"无法从生产目录 {PRODUCTION_ROOT} 导入 run_train：{error}"
+            )
+        return run_train, f"production={PRODUCTION_ROOT}"
+
     raise SystemExit(
-        "runner_adapter.py 还没有接入生产训练链路："
-        "请在 run_training() 中调用 app.pipelines.train_pipeline.run_train，"
-        "或设置 FAMOU_PRODUCTION_ROOT 指向生产项目目录。"
+        "未配置训练后端，评估无法进行（不会伪造指标）。请任选一种："
+        "FAMOU_TRAIN_ENTRY=module:function / "
+        "FAMOU_TRAIN_BACKEND=sample（仅联通验证）/ "
+        "FAMOU_PRODUCTION_ROOT=/生产项目目录"
+    )
+
+
+def run_training(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Run the configured training chain and return its summary.
+
+    The backend is resolved from the environment; only ``wmape`` and
+    ``bias_ratio`` are read from whatever it returns.
+    """
+    backend, label = resolve_backend()
+    print(f"[adapter] training backend: {label}", file=sys.stderr)
+    return backend(
+        params=params,
+        market="DOMESTIC_MARKET",
+        target="future_1d_box_qty",
     )
 
 

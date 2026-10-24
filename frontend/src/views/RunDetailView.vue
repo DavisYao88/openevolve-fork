@@ -129,7 +129,11 @@ async function previewFile(name) {
     const response = await api.runInputFile(runId.value, name);
     preview.value = { name, ...response, loading: false, error: "" };
   } catch (cause) {
-    preview.value = { name, content: "", loading: false, truncated: false, size: 0, error: cause.message };
+    const message = String(cause.message || cause);
+    const hint = message.includes("404")
+      ? "预览接口不存在：正在运行的后端是旧版本，请重启 scripts/visualizer.py 后再试。"
+      : message;
+    preview.value = { name, content: "", loading: false, truncated: false, size: 0, error: hint };
   }
 }
 
@@ -144,16 +148,22 @@ watch(logText, async () => {
   if (panel) panel.scrollTop = panel.scrollHeight;
 });
 
+function onKeydown(event) {
+  if (event.key === "Escape") closePreview();
+}
+
 onMounted(() => {
   loadDetail();
   loadCheckpoints();
   loadLog();
   detailTimer = window.setInterval(loadDetail, 5000);
   logTimer = window.setInterval(() => { if (isRunning.value || !logEof.value) loadLog(); }, 3000);
+  window.addEventListener("keydown", onKeydown);
 });
 onUnmounted(() => {
   window.clearInterval(detailTimer);
   window.clearInterval(logTimer);
+  window.removeEventListener("keydown", onKeydown);
 });
 </script>
 
@@ -232,10 +242,10 @@ onUnmounted(() => {
         </section>
 
         <section class="card">
-          <h2 class="card-title">输入文件</h2>
+          <h2 class="card-title">输入文件 <span class="card-hint">点击文件名预览内容</span></h2>
           <ul class="file-list">
             <li v-for="(exists, name) in inputFiles" :key="name">
-              <span class="mono">{{ name }}</span>
+              <button class="file-link mono" :disabled="!exists" :title="exists ? '预览文件内容' : '文件缺失'" @click="previewFile(name)">{{ name }}</button>
               <span class="file-state" :class="exists ? 'ok' : 'missing'">{{ exists ? "已保存" : "缺失" }}</span>
             </li>
           </ul>
@@ -283,6 +293,21 @@ onUnmounted(() => {
         <pre ref="logPanel" class="log-view">{{ logText || "暂无日志" }}</pre>
       </section>
     </template>
+
+    <div v-if="preview" class="modal-backdrop" @click.self="closePreview">
+      <div class="modal-card" role="dialog" aria-modal="true" :aria-label="`${preview.name} 内容预览`">
+        <header class="modal-head">
+          <h3 class="mono">{{ preview.name }}</h3>
+          <div class="modal-head-right">
+            <span v-if="!preview.loading && !preview.error" class="modal-meta">{{ (preview.size / 1024).toFixed(1) }} KB<template v-if="preview.truncated"> · 已截断</template></span>
+            <button class="button modal-close" @click="closePreview">✕ 关闭</button>
+          </div>
+        </header>
+        <p v-if="preview.loading" class="modal-hint">正在读取…</p>
+        <p v-else-if="preview.error" class="modal-hint error">{{ preview.error }}</p>
+        <pre v-else class="modal-code">{{ preview.content }}</pre>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -327,22 +352,36 @@ onUnmounted(() => {
 .island-stats b { font-size:12px; }
 .island-best { margin:10px 0 0; color:var(--muted); font-size:10px; overflow-wrap:anywhere; }
 .island-best code { font-size:10px; }
-.detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
+.detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
 .info-list { margin:0; }
-.info-list > div { display:flex; flex-direction:column; gap:4px; padding:7px 0; border-bottom:1px solid #f0f2f6; }
+.info-list > div { display:grid; grid-template-columns:88px 1fr; gap:10px; align-items:baseline; padding:8px 0; border-bottom:1px solid #f0f2f6; }
 .info-list > div:last-child { border-bottom:0; }
-.info-list dt { font-weight:600; }
+.info-list dt { color:#78849a; font-size:11px; font-weight:600; }
 .info-list dd { margin:0; font-size:12px; overflow-wrap:anywhere; }
+.card-hint { margin-left:8px; color:#9aa4b6; font-weight:400; font-size:10px; }
 .checkpoint-list, .file-list { margin:0; padding:0; list-style:none; }
 .checkpoint-list li { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid #f0f2f6; }
 .checkpoint-list li:last-child { border-bottom:0; }
 .checkpoint-list strong { font-size:11px; }
 .checkpoint-list small { display:block; margin-top:3px; color:var(--muted); font-size:10px; }
-.file-list li { display:flex; align-items:center; justify-content:space-between; padding:7px 0; border-bottom:1px solid #f0f2f6; font-size:11px; }
+.file-list li { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:6px 0; border-bottom:1px solid #f0f2f6; font-size:11px; }
 .file-list li:last-child { border-bottom:0; }
+.file-link { padding:2px 5px; margin-left:-5px; border:0; border-radius:6px; background:none; color:#315fce; font:11px "IBM Plex Mono",monospace; cursor:pointer; text-align:left; }
+.file-link:hover:not(:disabled) { background:#eef3ff; text-decoration:underline; }
+.file-link:disabled { color:#9aa4b6; cursor:not-allowed; }
 .file-state { padding:3px 7px; border-radius:100px; font-size:10px; font-weight:700; }
 .file-state.ok { background:#e7f7ef; color:#178454; }
 .file-state.missing { background:#fff0f0; color:#c14242; }
+.modal-backdrop { position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center; padding:24px; background:#10182866; }
+.modal-card { display:flex; flex-direction:column; width:min(860px,100%); max-height:82vh; border-radius:12px; background:#fff; box-shadow:0 18px 50px #10182833; overflow:hidden; }
+.modal-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 16px; border-bottom:1px solid var(--line); }
+.modal-head h3 { margin:0; font-size:13px; }
+.modal-head-right { display:flex; align-items:center; gap:10px; }
+.modal-meta { color:#78849a; font-size:11px; }
+.modal-close { min-height:30px; padding:4px 10px; font-size:11px; }
+.modal-hint { padding:20px 16px; color:#78849a; font-size:12px; }
+.modal-hint.error { color:#c14242; }
+.modal-code { flex:1; margin:0; overflow:auto; padding:14px 16px; background:#172033; color:#d7e0f1; font:11px/1.6 "IBM Plex Mono",monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
 .log-card { margin-top:16px; }
 .log-size { margin-left:8px; color:var(--muted); font-weight:400; font-size:11px; }
 .log-scroll { margin-left:12px; color:var(--muted); font-weight:400; font-size:11px; }

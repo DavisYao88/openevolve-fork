@@ -118,6 +118,7 @@ watch(
 
 function setView(value) {
   view.value = value;
+  resetView();
   router.replace({ query: { ...route.query, view: value } });
 }
 const statusLabels = { running: "运行中", completed: "已完成", failed: "失败", interrupted: "已中断", pending: "等待启动" };
@@ -318,17 +319,45 @@ function childNodes(node) {
   return nodes.value.filter((item) => item.parent_id === node.id);
 }
 
+function hasScore(node) {
+  const value = node?.metrics?.[activeMetric.value];
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function islandColor(node) {
+  return `hsl(${(Number(node.island || 0) * 67 + 210) % 360} 58% 55%)`;
+}
+
+const trendGroupHeight = 300;
+
+const trendGroups = computed(() => {
+  const buckets = !showIslands.value || islandIds.value.length <= 1
+    ? [{ key: "all", label: "", nodes: nodes.value }]
+    : islandIds.value.map((island) => ({
+        key: `island-${island}`,
+        label: `岛屿 ${island}`,
+        nodes: nodes.value.filter((node) => Number(node.island) === Number(island)),
+      }));
+  return buckets.map((bucket) => ({
+    ...bucket,
+    scored: bucket.nodes.filter((node) => hasScore(node)),
+    naNodes: bucket.nodes.filter((node) => !hasScore(node)),
+  }));
+});
+
+const trendHeight = computed(() => Math.max(320, trendGroups.value.length * trendGroupHeight + 40));
+
 function metricY(node) {
   const value = node.metrics?.[activeMetric.value];
   const min = Math.min(...scoreValues.value);
   const max = Math.max(...scoreValues.value);
-  if (!Number.isFinite(value)) return 420;
-  if (min === max) return 220;
-  return 390 - ((value - min) / (max - min)) * 340;
+  if (!Number.isFinite(value)) return 280;
+  if (min === max) return 130;
+  return 230 - ((value - min) / (max - min)) * 190;
 }
 
 function metricX(node) {
-  return 80 + ((Number(node.generation) || 0) / Math.max(maxGeneration.value, 1)) * 960;
+  return 70 + ((Number(node.generation) || 0) / Math.max(maxGeneration.value, 1)) * 950;
 }
 
 function saveMetric() {
@@ -468,14 +497,15 @@ onUnmounted(() => {
           <svg :viewBox="`0 0 ${chartWidth} ${Math.max(chartHeight, 480)}`" class="tree-chart" role="img" aria-label="程序演化关系图" @wheel.prevent="onWheel" @mousedown="startDrag" @mousemove="onDrag" @mouseup="endDrag" @mouseleave="endDrag">
             <g :transform="`translate(${panX} ${panY}) scale(${zoom})`">
               <g v-for="edge in data.edges" :key="`${edge.source}-${edge.target}`">
-                <line v-if="coordinates.has(edge.source) && coordinates.has(edge.target)" :x1="coordinates.get(edge.source).x" :y1="coordinates.get(edge.source).y" :x2="coordinates.get(edge.target).x" :y2="coordinates.get(edge.target).y" class="tree-edge" />
+                <line v-if="coordinates.has(edge.source) && coordinates.has(edge.target)" :x1="coordinates.get(edge.source).x" :y1="coordinates.get(edge.source).y" :x2="coordinates.get(edge.target).x" :y2="coordinates.get(edge.target).y" class="tree-edge" :class="{ chosen: selectedId && (selectedId === edge.source || selectedId === edge.target) }" />
               </g>
               <g v-for="generation in maxGeneration + 1" :key="generation">
                 <line :x1="70 + (generation - 1) / Math.max(maxGeneration, 1) * (chartWidth - 150)" y1="28" :x2="70 + (generation - 1) / Math.max(maxGeneration, 1) * (chartWidth - 150)" :y2="Math.max(chartHeight, 480) - 20" class="generation-guide" />
                 <text :x="70 + (generation - 1) / Math.max(maxGeneration, 1) * (chartWidth - 150)" y="19" text-anchor="middle" class="axis-label">第 {{ generation - 1 }} 代</text>
               </g>
-              <g v-for="node in nodes" :key="node.id" class="tree-node" :class="{ chosen: selectedId === node.id, highlighted: isHighlighted(node) }" @click="selectNode(node.id)">
-                <circle :cx="coordinates.get(node.id)?.x" :cy="coordinates.get(node.id)?.y" :r="isHighlighted(node) ? 14 : 10" :fill="isHighlighted(node) ? '#e8a63b' : `hsl(${(Number(node.island || 0) * 67 + 210) % 360} 58% 55%)`" />
+              <g v-for="node in nodes" :key="node.id" class="tree-node" :class="{ chosen: selectedId === node.id, highlighted: isHighlighted(node) }" @click="selectNode(node.id)" @dblclick="openProgram(node)">
+                <title>{{ node.id }} · 岛屿 {{ node.island }} · 第 {{ node.generation }} 代 · {{ activeMetric }}: {{ scoreLabel(node) }}</title>
+                <circle :cx="coordinates.get(node.id)?.x" :cy="coordinates.get(node.id)?.y" :r="isHighlighted(node) ? 14 : 10" :fill="isHighlighted(node) ? '#e8a63b' : islandColor(node)" />
                 <text :x="coordinates.get(node.id)?.x + 16" :y="coordinates.get(node.id)?.y + 4" class="node-label">{{ scoreLabel(node) }}</text>
               </g>
             </g>
@@ -489,17 +519,30 @@ onUnmounted(() => {
 
     <section v-else-if="view === 'trend'" class="card chart-card">
       <div class="chart-heading">
-        <div><h2>指标趋势</h2><p>{{ activeMetric }} · 按代数查看分数变化</p></div>
-        <span class="count-pill">最高 {{ bestScore === null ? "—" : bestScore.toFixed(4) }}</span>
+        <div><h2>指标趋势</h2><p>{{ activeMetric }} · 按代数查看分数变化{{ trendGroups.length > 1 ? " · 每个岛屿一张子图" : "" }}</p></div>
+        <div class="chart-heading-right">
+          <span class="count-pill">最高 {{ bestScore === null ? "—" : bestScore.toFixed(4) }}</span>
+          <button class="button zoom-button" @click="resetView">{{ Math.round(zoom * 100) }}%</button>
+        </div>
       </div>
       <div class="svg-scroll">
-        <svg viewBox="0 0 1120 460" class="trend-chart" role="img" aria-label="指标趋势散点图">
-          <line x1="70" y1="390" x2="1070" y2="390" class="chart-axis" />
-          <line x1="70" y1="40" x2="70" y2="390" class="chart-axis" />
-          <text x="570" y="440" text-anchor="middle" class="axis-label">进化代数</text>
-          <g v-for="node in nodes" :key="node.id" class="trend-point" :class="{ highlighted: isHighlighted(node), chosen: selectedId === node.id }" @click="selectNode(node.id)">
-            <line v-if="parentOf(node)" :x1="metricX(parentOf(node))" :y1="metricY(parentOf(node))" :x2="metricX(node)" :y2="metricY(node)" class="trend-edge" />
-            <circle :cx="metricX(node)" :cy="metricY(node)" r="7" :fill="`hsl(${(Number(node.island || 0) * 67 + 210) % 360} 58% 55%)`" />
+        <svg :viewBox="`0 0 1120 ${trendHeight}`" class="trend-chart" role="img" aria-label="指标趋势散点图" @wheel.prevent="onWheel" @mousedown="startDrag" @mousemove="onDrag" @mouseup="endDrag" @mouseleave="endDrag">
+          <g :transform="`translate(${panX} ${panY}) scale(${zoom})`">
+            <g v-for="(group, index) in trendGroups" :key="group.key" :transform="`translate(0 ${index * trendGroupHeight})`">
+              <text v-if="group.label" x="14" y="22" class="trend-group-title">{{ group.label }}（{{ group.nodes.length }} 个程序）</text>
+              <line x1="60" y1="240" x2="1090" y2="240" class="chart-axis" />
+              <line x1="60" y1="30" x2="60" y2="240" class="chart-axis" />
+              <text x="575" y="266" text-anchor="middle" class="axis-label">进化代数</text>
+              <g v-for="node in group.scored" :key="node.id" class="trend-point" :class="{ highlighted: isHighlighted(node), chosen: selectedId === node.id }" @click="selectNode(node.id)" @dblclick="openProgram(node)">
+                <line v-if="parentOf(node) && hasScore(parentOf(node))" :x1="metricX(parentOf(node))" :y1="metricY(parentOf(node))" :x2="metricX(node)" :y2="metricY(node)" class="trend-edge" />
+                <circle :cx="metricX(node)" :cy="metricY(node)" r="6" :fill="islandColor(node)" />
+                <title>{{ node.id }} · 第 {{ node.generation }} 代 · {{ activeMetric }}: {{ scoreLabel(node) }}</title>
+              </g>
+              <g v-if="group.naNodes.length" class="trend-na">
+                <rect x="60" y="278" width="1030" height="24" rx="6" />
+                <text x="70" y="294">无有效指标：{{ group.naNodes.length }} 个程序</text>
+              </g>
+            </g>
           </g>
         </svg>
       </div>
@@ -691,6 +734,7 @@ export default { components: { NodeDetail } };
 .svg-scroll { overflow:auto; border-top:1px solid #f0f2f6; }
 .tree-chart { display:block; width:100%; min-width:760px; }
 .tree-edge { stroke:#c9d1df; stroke-width:1.5; }
+.tree-edge.chosen { stroke:#e8a63b; stroke-width:2.5; }
 .generation-guide { stroke:#e9edf3; stroke-dasharray:3 5; }
 .axis-label { fill:#8792a5; font-size:11px; }
 .tree-node { cursor:pointer; }
@@ -722,7 +766,11 @@ export default { components: { NodeDetail } };
 .diff-panel .removed { background:#592d36; color:#ffd0d0; }
 .diff-panel .changed { color:#ffe1a2; }
 .archive-label { color:#b27810; font-weight:700; }
-.trend-chart { display:block; width:100%; min-width:720px; height:min(65vh,650px); }
+.trend-chart { display:block; width:100%; min-width:720px; height:auto; max-height:min(78vh,900px); cursor:grab; }
+.chart-heading-right { display:flex; align-items:center; gap:8px; }
+.trend-group-title { fill:#5b6a80; font-size:12px; font-weight:700; }
+.trend-na rect { fill:#f4f6fa; stroke:#e3e8f0; }
+.trend-na text { fill:#8b96a8; font-size:10px; }
 .chart-axis { stroke:#bdc7d6; }
 .trend-edge { stroke:#cbd3e0; stroke-width:1; }
 .trend-point { cursor:pointer; }

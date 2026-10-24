@@ -299,6 +299,33 @@ class TestVisualizerRunUI(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_run_input_file_preview(self):
+        run_dir = self.gui_runs / "evolve_task_preview"
+        (run_dir / "input").mkdir(parents=True)
+        (run_dir / "input" / "prompt.md").write_text("# hello preview", encoding="utf-8")
+
+        response = self.client.get("/api/runs/evolve_task_preview/input/prompt.md")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["content"], "# hello preview")
+        self.assertFalse(payload["truncated"])
+
+        # 白名单之外的文件一律拒绝。
+        self.assertEqual(
+            self.client.get("/api/runs/evolve_task_preview/input/secret.py").status_code,
+            400,
+        )
+        # 白名单内但未保存的文件返回 404。
+        self.assertEqual(
+            self.client.get("/api/runs/evolve_task_preview/input/task.json").status_code,
+            404,
+        )
+        # 未知任务返回 404。
+        self.assertEqual(
+            self.client.get("/api/runs/evolve_task_missing/input/prompt.md").status_code,
+            404,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
