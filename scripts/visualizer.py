@@ -1225,6 +1225,185 @@ def run_input_file_api(run_id, name):
     return jsonify({"name": name, "size": path.stat().st_size, "truncated": truncated, "content": text})
 
 
+# 输出文件白名单：显示名 -> 相对于任务目录的实际路径
+_OUTPUT_FILES = {
+    "best_program.py": ("output", "best", "best_program.py"),
+    "best_program_info.json": ("output", "best", "best_program_info.json"),
+}
+
+
+@app.route("/api/runs/<run_id>/output/<name>")
+def run_output_file_api(run_id, name):
+    """Return the text content of one saved output file (best program etc.)."""
+    if not _is_local_request():
+        abort(403)
+    run_dir = _resolve_run_dir(run_id)
+    if run_dir is None:
+        return jsonify({"error": f"找不到任务：{run_id}"}), 404
+    if name not in _OUTPUT_FILES:
+        return jsonify({"error": "不支持的文件。"}), 400
+    path = run_dir.joinpath(*_OUTPUT_FILES[name])
+    if not path.is_file():
+        return jsonify({"error": "文件不存在。"}), 404
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as error:
+        return jsonify({"error": f"读取失败：{error}"}), 500
+    truncated = len(text) > 200_000
+    if truncated:
+        text = text[:200_000]
+    return jsonify({"name": name, "size": path.stat().st_size, "truncated": truncated, "content": text})
+
+
+_MAX_TREE_ITEMS = 200
+
+
+def _build_file_tree(root, relative, limit=_MAX_TREE_ITEMS):
+    """Scan one folder and return plain dicts the UI can render as a tree."""
+    entries = []
+    try:
+        children = sorted(root.iterdir(), key=lambda path: (not path.is_dir(), path.name))
+    except OSError:
+        return entries
+    for path in children[:limit]:
+        if path.name == "__pycache__":
+            continue
+        rel = "/".join([*relative, path.name])
+        if path.is_dir():
+            entries.append({
+                "type": "dir",
+                "name": path.name,
+                "path": rel,
+                "children": _build_file_tree(path, [*relative, path.name], limit),
+            })
+        else:
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = 0
+            entries.append({"type": "file", "name": path.name, "path": rel, "size": size})
+    return entries
+
+
+@app.route("/api/runs/<run_id>/files")
+def run_files_api(run_id):
+    """List a run's input / output / checkpoint files as a tree for browsing."""
+    if not _is_local_request():
+        abort(403)
+    run_dir = _resolve_run_dir(run_id)
+    if run_dir is None:
+        return jsonify({"error": f"找不到任务：{run_id}"}), 404
+
+    sections = []
+    # 显示名 / 实际目录 / 读取文件时使用的相对前缀
+    for name, base, prefix in (
+        ("input", run_dir / "input", "input"),
+        ("output", run_dir / "output", "output"),
+        ("checkpoints", run_dir / "output" / "checkpoints", "output/checkpoints"),
+    ):
+        if not base.is_dir():
+            continue
+        children = _build_file_tree(base, prefix.split("/"))
+        if name == "output":
+            # checkpoints 单独列为一段，避免重复
+            children = [item for item in children if item["name"] != "checkpoints"]
+        sections.append({"type": "dir", "name": name, "path": prefix, "children": children})
+
+    return jsonify({
+        "run_id": run_id,
+        "run_dir": Path(os.path.relpath(run_dir, PROJECT_ROOT)).as_posix(),
+        "tree": sections,
+    })
+
+
+@app.route("/api/runs/<run_id>/file")
+def run_file_api(run_id):
+    """Read one file inside the run folder. `path` must stay inside run_dir."""
+    if not _is_local_request():
+        abort(403)
+    run_dir = _resolve_run_dir(run_id)
+    if run_dir is None:
+        return jsonify({"error": f"找不到任务：{run_id}"}), 404
+
+    relative = request.args.get("path", "")
+    if not relative:
+        return jsonify({"error": "缺少 path 参数。"}), 400
+    base = run_dir.resolve()
+    target = (run_dir / relative).resolve()
+    if str(target) != str(base) and not str(target).startswith(str(base) + os.sep):
+        return jsonify({"error": "路径不合法。"}), 400
+    if not target.is_file():
+        return jsonify({"error": "文件不存在。"}), 404
+    try:
+        raw = target.read_bytes()
+    except OSError as error:
+        return jsonify({"error": f"读取失败：{error}"}), 500
+
+    truncated = len(raw) > 300_000
+    body = raw[:300_000] if truncated else raw
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return jsonify({"error": "该文件不是 UTF-8 文本文件（可能是二进制产物）。", "binary": True}), 415
+
+    return jsonify({
+        "name": target.name,
+        "path": relative,
+        "size": len(raw),
+        "truncated": truncated,
+        "content": text,
+    })
+
+
+@app.route("/api/runs/<run_id>/program/<program_id>")
+def run_program_api(run_id, program_id):
+    """Find one program across every checkpoint of a run.
+
+    Programs from early iterations often disappear from later checkpoints, so the
+    program page needs a lookup that is not limited to the newest checkpoint.
+    """
+    if not _is_local_request():
+        abort(403)
+    run_dir = _resolve_run_dir(run_id)
+    if run_dir is None:
+        return jsonify({"error": f"找不到任务：{run_id}"}), 404
+
+    root = _checkpoints_root(run_dir)
+    if not root.is_dir():
+        return jsonify({"error": "该任务还没有 checkpoint。"}), 404
+
+    def checkpoint_number(path):
+        try:
+            return int(path.name.rsplit("_", 1)[-1])
+        except (IndexError, ValueError):
+            return -1
+
+    folders = sorted(
+        (path for path in root.iterdir() if path.is_dir() and path.name.startswith("checkpoint_")),
+        key=checkpoint_number,
+        reverse=True,
+    )
+    for folder in folders:
+        try:
+            data = load_evolution_data(str(folder))
+        except (OSError, ValueError):
+            continue
+        match = next((node for node in data.get("nodes", []) if node.get("id") == program_id), None)
+        if match is None:
+            continue
+        parent = next((node for node in data.get("nodes", []) if node.get("id") == match.get("parent_id")), None)
+        return jsonify({
+            "run_id": run_id,
+            "checkpoint": folder.name,
+            "node": match,
+            "parent": parent,
+            "archive": data.get("archive", []),
+            "checkpoints": _list_checkpoints(run_dir),
+        })
+
+    return jsonify({"error": f"在所有检查点里都没有找到程序：{program_id}"}), 404
+
+
 @app.route("/api/runs/<run_id>/log")
 def run_log_api(run_id):
     """Tail a run's console log. Pass ?offset=N to get only bytes after N."""

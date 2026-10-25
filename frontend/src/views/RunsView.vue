@@ -65,6 +65,7 @@ onUnmounted(() => window.clearInterval(timer));
         <span class="run-cell">{{ run.updated_at || "—" }}</span>
         <div class="row-actions">
           <RouterLink class="button open-run" :to="{ path: `/runs/${run.id}` }">详情</RouterLink>
+          <RouterLink class="button open-run" :to="{ path: '/code', query: { run_id: run.id } }">代码</RouterLink>
           <RouterLink class="button primary open-run" :to="{ path: '/', query: { run_id: run.id } }">查看</RouterLink>
         </div>
       </article>

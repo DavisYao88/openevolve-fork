@@ -13,9 +13,9 @@ enforce_evolve_blocks: true
 max_code_length: 20000
 
 llm:
-  api_base: "https://platform.deepseek.com"   # Ollama 的 OpenAI 兼容端点
+  api_base: "https://api.deepseek.com"       # OpenAI 兼容端点；platform.deepseek.com 是控制台域名，会被网关拦 429
   api_key: "***REDACTED-API-KEY***"                        # 占位值，避免依赖 shell 里的 OPENAI_API_KEY
-  primary_model: "deepseek-v4-flash"
+  primary_model: "deepseek-flash"            # 平台实际 id：deepseek-flash / deepseek-v4-pro
   temperature: 0.6
   max_tokens: 16000                        # thinking 模型，给足预算
   timeout: 1800                            # 单次请求 30 分钟，本地 35B 必须放宽

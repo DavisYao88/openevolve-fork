@@ -9,7 +9,7 @@ const data = ref({ archive: [], nodes: [], edges: [], checkpoint_dir: "", checkp
 const selectedId = ref("");
 const metric = ref(localStorage.getItem("openevolve.metric") || "");
 const highlight = ref("top");
-const viewOptions = ["tree", "trend", "list", "map"];
+const viewOptions = ["tree", "iterations", "trend", "list", "map"];
 const view = ref(viewOptions.includes(route.query.view) ? route.query.view : "tree");
 const selectedCheckpoint = ref("");
 const progressOpen = ref(false);
@@ -28,7 +28,11 @@ let progressTimer;
 
 const nodes = computed(() => data.value.nodes || []);
 const metrics = computed(() => [...new Set(nodes.value.flatMap((node) => Object.keys(node.metrics || {})))]);
-const activeMetric = computed(() => metrics.value.includes(metric.value) ? metric.value : metrics.value[0] || "combined_score");
+const activeMetric = computed(() => {
+  if (metrics.value.includes(metric.value)) return metric.value;
+  if (metrics.value.includes("combined_score")) return "combined_score";
+  return metrics.value[0] || "combined_score";
+});
 const selected = computed(() => nodes.value.find((node) => node.id === selectedId.value));
 const scoreValues = computed(() => nodes.value
   .map((node) => node.metrics?.[activeMetric.value])
@@ -70,8 +74,20 @@ function cellRect(cell, geometry, grid) {
   return { x: cell.x * geometry.size, y: (binsY - 1 - cell.y) * geometry.size };
 }
 
+const scrollBox = ref(null);
+
 function resetView() {
   zoom.value = 1;
+  panX.value = 0;
+  panY.value = 0;
+}
+
+function fitView() {
+  const box = scrollBox.value;
+  if (!box) return;
+  const { width, height } = activeTreeSize.value;
+  const ratio = Math.min(box.clientWidth / width, box.clientHeight / height);
+  zoom.value = Math.min(6, Math.max(0.3, Number.isFinite(ratio) ? ratio : 1));
   panX.value = 0;
   panY.value = 0;
 }
@@ -133,32 +149,297 @@ const lastIteration = computed(() => {
   const iterations = progress.value?.iterations || [];
   return iterations.length ? iterations[iterations.length - 1] : null;
 });
+const iterations = computed(() => progress.value?.iterations || []);
 const islands = computed(() => progress.value?.islands || []);
 const logTail = computed(() => progress.value?.log_tail || []);
 
-const coordinates = computed(() => {
-  const grouped = new Map();
-  const ordered = [...nodes.value].sort((a, b) => {
-    const generationDiff = (a.generation || 0) - (b.generation || 0);
-    return generationDiff || (a.island || 0) - (b.island || 0) || String(a.id).localeCompare(String(b.id));
-  });
+// 进化树：按父子关系分层、向右展开（自绘连线，不用组件）
+const TREE_COLUMN = 210;
+const TREE_ROW = 58;
+
+const treeLayout = computed(() => {
+  const nodeList = nodes.value;
+  const empty = { positions: new Map(), edges: [], width: chartWidth, height: 480 };
+  if (!nodeList.length) return empty;
+
+  const byId = new Map(nodeList.map((node) => [node.id, node]));
+  const childrenOf = new Map();
+  const hasParent = new Set();
+  const edgeList = (data.value.edges || []).filter((edge) => byId.has(edge.source) && byId.has(edge.target));
+  for (const edge of edgeList) {
+    if (!childrenOf.has(edge.source)) childrenOf.set(edge.source, []);
+    childrenOf.get(edge.source).push(edge.target);
+    hasParent.add(edge.target);
+  }
+
+  const ordered = [...nodeList].sort((a, b) =>
+    (a.generation || 0) - (b.generation || 0) ||
+    (a.island || 0) - (b.island || 0) ||
+    String(a.id).localeCompare(String(b.id)));
+  const roots = ordered.filter((node) => !hasParent.has(node.id));
+  const rootIds = roots.length ? roots.map((node) => node.id) : [ordered[0].id];
+
   const positions = new Map();
-  const rowHeight = Math.max(44, Math.min(78, 600 / Math.max(ordered.length, 1)));
-  ordered.forEach((node) => {
-    const groupKey = showIslands.value ? `${node.island}:${node.generation}` : String(node.generation);
-    const row = grouped.get(groupKey) || 0;
-    grouped.set(groupKey, row + 1);
-    const totalRows = Math.max(1, ordered.filter((item) => {
-      const key = showIslands.value ? `${item.island}:${item.generation}` : String(item.generation);
-      return key === groupKey;
-    }).length);
-    const bucketStart = [...grouped.keys()].indexOf(groupKey);
-    const y = 46 + (bucketStart * 1.25 + row / totalRows) * Math.max(rowHeight, 54);
-    const x = 70 + (Number(node.generation) || 0) / Math.max(maxGeneration.value, 1) * (chartWidth - 150);
-    positions.set(node.id, { x, y });
-  });
-  return positions;
+  const seen = new Set();
+  let cursor = 0;
+
+  const place = (id, depth) => {
+    if (seen.has(id)) return positions.get(id);
+    seen.add(id);
+    const children = (childrenOf.get(id) || []).slice().sort((a, b) => {
+      const left = byId.get(a);
+      const right = byId.get(b);
+      return (left?.generation || 0) - (right?.generation || 0) || String(a).localeCompare(String(b));
+    });
+    let y;
+    if (children.length) {
+      const childYs = children.map((child) => place(child, depth + 1)?.y).filter((value) => value != null);
+      y = childYs.length ? childYs.reduce((sum, value) => sum + value, 0) / childYs.length : cursor * TREE_ROW + 46;
+      if (!childYs.length) cursor += 1;
+    } else {
+      y = cursor * TREE_ROW + 46;
+      cursor += 1;
+    }
+    const position = { x: 96 + depth * TREE_COLUMN, y };
+    positions.set(id, position);
+    return position;
+  };
+
+  for (const rootId of rootIds) place(rootId, 0);
+  // 没有连线关系的孤立节点也要出现，按代数放在对应列
+  for (const node of ordered) {
+    if (positions.has(node.id)) continue;
+    positions.set(node.id, { x: 96 + (Number(node.generation) || 0) * TREE_COLUMN, y: cursor * TREE_ROW + 46 });
+    cursor += 1;
+  }
+
+  const values = [...positions.values()];
+  return {
+    positions,
+    edges: edgeList.filter((edge) => positions.has(edge.source) && positions.has(edge.target)),
+    width: Math.max(chartWidth, Math.max(...values.map((item) => item.x)) + 240),
+    height: Math.max(420, Math.max(...values.map((item) => item.y)) + 70),
+  };
 });
+
+function edgePath(source, target) {
+  if (!source || !target) return "";
+  const midX = (source.x + target.x) / 2;
+  return `M ${source.x} ${source.y} C ${midX} ${source.y}, ${midX} ${target.y}, ${target.x} ${target.y}`;
+}
+
+function nodePosition(id) {
+  return treeLayout.value.positions.get(id);
+}
+
+// 节点填充=分数色阶，描边=岛屿；最优节点到根的整条路径描金
+const scoreRange = computed(() => {
+  const values = nodes.value
+    .map((node) => Number(node.metrics?.[activeMetric.value]))
+    .filter((value) => Number.isFinite(value));
+  return values.length ? { min: Math.min(...values), max: Math.max(...values) } : { min: 0, max: 1 };
+});
+
+function scoreFill(node) {
+  const score = Number(node.metrics?.[activeMetric.value]);
+  if (!Number.isFinite(score)) return "#c3ccdb";
+  const { min, max } = scoreRange.value;
+  const ratio = max === min ? 1 : (score - min) / (max - min);
+  return `hsl(${Math.round(212 - ratio * 152)} ${Math.round(28 + ratio * 46)}% ${Math.round(80 - ratio * 24)}%)`;
+}
+
+const parentIdOf = computed(() => {
+  const map = new Map();
+  for (const edge of data.value.edges || []) map.set(edge.target, edge.source);
+  return map;
+});
+
+const elitePath = computed(() => {
+  const path = new Set();
+  let current = nodes.value.reduce((bestId, node) => {
+    if (!bestId) return node.id;
+    return scoreOfNode(node) > scoreOfNode(nodes.value.find((item) => item.id === bestId)) ? node.id : bestId;
+  }, "");
+  while (current && !path.has(current)) {
+    path.add(current);
+    current = parentIdOf.value.get(current);
+  }
+  return path;
+});
+
+function scoreOfNode(node) {
+  const value = Number(node?.metrics?.[activeMetric.value]);
+  return Number.isFinite(value) ? value : -Infinity;
+}
+
+const eliteEdges = computed(() => new Set(
+  (data.value.edges || [])
+    .filter((edge) => elitePath.value.has(edge.source) && elitePath.value.has(edge.target))
+    .map((edge) => `${edge.source}->${edge.target}`),
+));
+
+function isEliteEdge(edge) {
+  return eliteEdges.value.has(`${edge.source}->${edge.target}`);
+}
+
+// ── 悬浮提示：跟随鼠标显示节点详情，双击直接打开代码 ──
+const hoverTip = ref(null);
+
+function tipRows(entries) {
+  return entries.filter(([, value]) => value !== null && value !== undefined && value !== "");
+}
+
+function showTip(event, entries) {
+  hoverTip.value = { x: event.clientX, y: event.clientY, rows: tipRows(entries) };
+}
+
+function moveTip(event) {
+  if (hoverTip.value) {
+    hoverTip.value = { ...hoverTip.value, x: event.clientX, y: event.clientY };
+  }
+}
+
+function hideTip() {
+  hoverTip.value = null;
+}
+
+function tipForNode(node) {
+  return [
+    ["程序", String(node.id).slice(0, 8)],
+    ["岛屿", node.island ?? "—"],
+    ["代数", node.generation ?? "—"],
+    ["发现轮次", node.iteration_found ?? "—"],
+    [activeMetric.value, scoreLabel(node)],
+    ["父程序", node.parent_id ? String(node.parent_id).slice(0, 8) : "初始程序"],
+    ["操作", "单击选中 · 双击查看代码"],
+  ];
+}
+
+function tipForIteration(item) {
+  return [
+    ["轮次", `第 ${item.iteration} 轮`],
+    ["程序", String(item.program_id).slice(0, 8)],
+    ["父程序", item.parent_id ? String(item.parent_id).slice(0, 8) : "初始程序"],
+    ["状态", item.status === "completed" ? "成功" : "失败"],
+    ["分数", iterationScore(item) === null ? "—" : iterationScore(item).toFixed(3)],
+    ["耗时", item.duration_seconds ? `${Number(item.duration_seconds).toFixed(1)}s` : "—"],
+    ["错误", item.error || ""],
+    ["操作", "双击查看代码"],
+  ];
+}
+
+// ── 轮次树：每一轮一个节点，横轴=轮次序号，从左到右完整展开 ──
+const treeMode = ref("evolution");
+const ITERATION_COLUMN = 132;
+const ITERATION_ROW = 54;
+
+function iterationScore(item) {
+  const match = /combined_score=(-?[\d.]+)/.exec(item?.metrics_text || "");
+  return match ? Number(match[1]) : null;
+}
+
+const iterationScoreRange = computed(() => {
+  const values = iterations.value.map(iterationScore).filter((value) => Number.isFinite(value));
+  return values.length ? { min: Math.min(...values), max: Math.max(...values) } : { min: 0, max: 1 };
+});
+
+function fillForIteration(item) {
+  const score = iterationScore(item);
+  if (!Number.isFinite(score)) return "#c3ccdb";
+  const { min, max } = iterationScoreRange.value;
+  const ratio = max === min ? 1 : (score - min) / (max - min);
+  return `hsl(${Math.round(212 - ratio * 152)} ${Math.round(28 + ratio * 46)}% ${Math.round(80 - ratio * 24)}%)`;
+}
+
+const iterationTree = computed(() => {
+  const list = iterations.value.filter((item) => item?.program_id);
+  const empty = { rows: [], edges: [], width: chartWidth, height: 420 };
+  if (!list.length) return empty;
+
+  const byProgram = new Map(list.map((item) => [item.program_id, item]));
+  const childrenOf = new Map();
+  const hasParent = new Set();
+  for (const item of list) {
+    const parent = item.parent_id;
+    if (parent && byProgram.has(parent)) {
+      if (!childrenOf.has(parent)) childrenOf.set(parent, []);
+      childrenOf.get(parent).push(item.program_id);
+      hasParent.add(item.program_id);
+    }
+  }
+
+  const minIteration = Math.min(...list.map((item) => Number(item.iteration) || 0));
+  const positions = new Map();
+  const seen = new Set();
+  let cursor = 0;
+
+  const place = (programId) => {
+    if (seen.has(programId)) return positions.get(programId);
+    seen.add(programId);
+    const item = byProgram.get(programId);
+    const children = (childrenOf.get(programId) || []).slice()
+      .sort((a, b) => (Number(byProgram.get(a)?.iteration) || 0) - (Number(byProgram.get(b)?.iteration) || 0));
+    let y;
+    if (children.length) {
+      const ys = children.map((child) => place(child)?.y).filter((value) => value != null);
+      y = ys.length ? ys.reduce((sum, value) => sum + value, 0) / ys.length : cursor * ITERATION_ROW + 46;
+      if (!ys.length) cursor += 1;
+    } else {
+      y = cursor * ITERATION_ROW + 46;
+      cursor += 1;
+    }
+    const position = { x: 96 + ((Number(item.iteration) || 0) - minIteration) * ITERATION_COLUMN, y, item };
+    positions.set(programId, position);
+    return position;
+  };
+
+  const roots = list
+    .filter((item) => !hasParent.has(item.program_id))
+    .sort((a, b) => (Number(a.iteration) || 0) - (Number(b.iteration) || 0));
+  for (const root of roots) place(root.program_id);
+  for (const item of list) {
+    if (positions.has(item.program_id)) continue;
+    positions.set(item.program_id, {
+      x: 96 + ((Number(item.iteration) || 0) - minIteration) * ITERATION_COLUMN,
+      y: cursor * ITERATION_ROW + 46,
+      item,
+    });
+    cursor += 1;
+  }
+
+  const rows = [...positions.values()].sort((a, b) => a.x - b.x || a.y - b.y);
+  const edges = list
+    .filter((item) => item.parent_id && positions.has(item.parent_id))
+    .map((item) => {
+      const parent = positions.get(item.parent_id);
+      const child = positions.get(item.program_id);
+      return { source: parent, target: child, id: `${item.parent_id}-${item.program_id}` };
+    });
+
+  return {
+    rows,
+    edges,
+    width: Math.max(chartWidth, Math.max(...rows.map((row) => row.x)) + 260),
+    height: Math.max(420, Math.max(...rows.map((row) => row.y)) + 70),
+  };
+});
+
+const activeTreeSize = computed(() => (treeMode.value === "iterations"
+  ? { width: iterationTree.value.width, height: iterationTree.value.height }
+  : { width: treeLayout.value.width, height: treeLayout.value.height }));
+
+// 轮次树很宽（50 轮），若按容器宽度等比缩放会把节点压得看不清，
+// 因此它按 1:1 像素渲染并交给容器横向滚动，缩放只改变 SVG 自身尺寸。
+const chartStyle = computed(() => (treeMode.value === "iterations"
+  ? {
+      width: `${Math.round(iterationTree.value.width * zoom.value)}px`,
+      height: `${Math.round(iterationTree.value.height * zoom.value)}px`,
+    }
+  : {}));
+
+const chartTransform = computed(() => (treeMode.value === "iterations"
+  ? `translate(${panX.value} ${panY.value})`
+  : `translate(${panX.value} ${panY.value}) scale(${zoom.value})`));
 
 const visibleNodes = computed(() => {
   const query = search.value.trim().toLowerCase();
@@ -180,8 +461,18 @@ const visibleNodes = computed(() => {
   return sorted;
 });
 
+function programLink(id) {
+  const query = { run_id: runId.value };
+  if (selectedCheckpoint.value) query.checkpoint = selectedCheckpoint.value;
+  return { path: `/program/${encodeURIComponent(id)}`, query };
+}
+
 function isHighlighted(node) {
-  if (highlight.value === "top") return bestScore.value !== null && Number(node.metrics?.[activeMetric.value]) === bestScore.value;
+  if (highlight.value === "top") {
+    // 所有节点分数并列时不做高亮，否则整张图都会被涂成金色
+    if (new Set(scoreValues.value).size < 2) return false;
+    return bestScore.value !== null && Number(node.metrics?.[activeMetric.value]) === bestScore.value;
+  }
   if (highlight.value === "first") return Number(node.generation) === 0;
   if (highlight.value === "failed") return node.metrics?.error != null;
   if (highlight.value === "unset") return node.metrics?.[activeMetric.value] == null;
@@ -311,6 +602,12 @@ function openProgram(node) {
   window.open(location.href, "_blank", "noopener");
 }
 
+// 双击在当前页打开代码（window.open 常被浏览器拦截，且用户期望"点了就看"）
+function openProgramHere(id) {
+  if (!id) return;
+  router.push(programLink(id));
+}
+
 function parentOf(node) {
   return nodes.value.find((item) => item.id === node.parent_id);
 }
@@ -385,7 +682,7 @@ onUnmounted(() => {
         <p>{{ route.query.run_id ? `任务 ${route.query.run_id}` : (data.checkpoint_dir || "等待检查点数据") }}</p>
       </div>
       <div class="view-switch">
-        <button v-for="item in [['tree','进化树'],['trend','性能趋势'],['list','程序列表'],['map','特征地图']]" :key="item[0]" class="button" :class="{ selected: view === item[0] }" @click="setView(item[0])">{{ item[1] }}</button>
+        <button v-for="item in [['tree','进化树'],['iterations','轮次明细'],['trend','性能趋势'],['list','程序列表'],['map','特征地图']]" :key="item[0]" class="button" :class="{ selected: view === item[0] }" @click="setView(item[0])">{{ item[1] }}</button>
       </div>
     </div>
 
@@ -424,50 +721,19 @@ onUnmounted(() => {
         </div>
         <div class="progress-head-right">
           <span class="status-badge" :class="progress.status">{{ statusLabels[progress.status] || progress.status }}</span>
-          <button class="button progress-toggle" :aria-expanded="progressOpen" @click="progressOpen = !progressOpen">
-            {{ progressOpen ? "收起详情" : "展开详情" }} {{ progressOpen ? "▴" : "▾" }}
-          </button>
+          <RouterLink v-if="runId" class="button" :to="{ path: `/runs/${runId}` }">任务详情与日志</RouterLink>
         </div>
       </div>
       <div class="progress-bar-track" role="progressbar" :aria-valuenow="progressPercent" aria-valuemin="0" aria-valuemax="100">
         <div class="progress-bar-fill" :class="progress.status" :style="{ width: `${progressPercent}%` }"></div>
       </div>
-      <div class="progress-stats">
-        <div><small>进度</small><strong>{{ progress.finished_iterations }} / {{ progress.total_iterations }}</strong></div>
-        <div><small>成功</small><strong>{{ progress.completed_iterations }}</strong></div>
-        <div><small>失败</small><strong>{{ progress.failed_iterations }}</strong></div>
-        <div><small>检查点</small><strong>{{ progress.has_checkpoint ? progress.checkpoints.join(", ") : "尚未生成" }}</strong></div>
-        <div><small>token</small><strong>{{ progress.tokens?.prompt || 0 }} / {{ progress.tokens?.completion || 0 }}</strong></div>
-      </div>
-      <p v-if="lastIteration" class="progress-last">
-        最近一轮：第 {{ lastIteration.iteration }} 轮 ·
-        <b>{{ lastIteration.status === "completed" ? "成功" : "失败" }}</b>
-        <template v-if="lastIteration.stage"> · 阶段 {{ stageLabels[lastIteration.stage] || lastIteration.stage }}</template>
-        <template v-if="lastIteration.error"> · {{ lastIteration.error }}</template>
+      <p class="progress-last">
+        第 {{ progress.finished_iterations }} / {{ progress.total_iterations }} 轮 ·
+        成功 {{ progress.completed_iterations }} · 失败 {{ progress.failed_iterations }}
       </p>
       <p v-if="progress.status === 'running' && !progress.has_checkpoint" class="progress-hint">
         正在运行。检查点按固定轮次间隔保存，生成之前下方图表不会出现程序节点。
       </p>
-
-      <div v-if="progressOpen">
-        <div v-if="islands.length" class="island-grid">
-          <article v-for="island in islands" :key="island.index" class="island-card">
-            <header><strong>岛屿 {{ island.index }}</strong><span>第 {{ island.generation }} 代</span></header>
-            <div class="island-stats">
-              <div><small>程序</small><b>{{ island.programs }}</b></div>
-              <div><small>最高分</small><b>{{ Number(island.best_score).toFixed(4) }}</b></div>
-              <div><small>平均分</small><b>{{ Number(island.avg_score).toFixed(4) }}</b></div>
-              <div><small>多样性</small><b>{{ Number(island.diversity).toFixed(2) }}</b></div>
-            </div>
-            <p v-if="island.best_program_id" class="island-best">最优 <code>{{ island.best_program_id }}</code></p>
-          </article>
-        </div>
-
-        <details v-if="logTail.length" class="log-panel">
-          <summary>运行日志（最近 {{ logTail.length }} 行）</summary>
-          <pre>{{ logTail.join("\n") }}</pre>
-        </details>
-      </div>
     </section>
 
     <p v-if="error" class="message error">{{ error }}</p>
@@ -485,29 +751,97 @@ onUnmounted(() => {
     <div v-else-if="view === 'tree'" class="workspace">
       <section class="card chart-card">
         <div class="chart-heading">
-          <div><h2>程序演化关系</h2><p>横轴为代数；滚轮缩放，按住拖拽平移</p></div>
+          <div>
+            <h2>{{ treeMode === "iterations" ? "轮次演化树" : "程序演化关系" }}</h2>
+            <p v-if="treeMode === 'iterations'">每一轮一个节点，横轴=轮次序号，从左到右完整展开；红色描边=该轮失败 · 滚轮缩放，按住拖拽平移</p>
+            <p v-else>方块填充=分数（蓝→绿→黄由低到高），描边=岛屿，金色=最优节点到根的进化路径 · 滚轮缩放，按住拖拽平移</p>
+          </div>
           <div class="zoom-controls">
-            <span class="count-pill">{{ nodes.length }} 个程序 · {{ maxGeneration + 1 }} 代</span>
+            <button class="button zoom-button" :class="{ selected: treeMode === 'evolution' }" @click="treeMode = 'evolution'; resetView()">按演化关系</button>
+            <button class="button zoom-button" :class="{ selected: treeMode === 'iterations' }" @click="treeMode = 'iterations'; resetView()">按轮次</button>
+            <span class="count-pill">{{ treeMode === "iterations" ? `${iterationTree.rows.length} 轮` : `${nodes.length} 个程序 · ${maxGeneration + 1} 代` }}</span>
             <button class="button zoom-button" @click="zoom = Math.min(6, zoom * 1.2)">＋</button>
             <button class="button zoom-button" @click="zoom = Math.max(0.3, zoom / 1.2)">－</button>
+            <button class="button zoom-button" title="缩放到完整显示整棵树" @click="fitView">适应</button>
             <button class="button zoom-button" @click="resetView">{{ Math.round(zoom * 100) }}%</button>
           </div>
         </div>
-        <div class="svg-scroll">
-          <svg :viewBox="`0 0 ${chartWidth} ${Math.max(chartHeight, 480)}`" class="tree-chart" role="img" aria-label="程序演化关系图" @wheel.prevent="onWheel" @mousedown="startDrag" @mousemove="onDrag" @mouseup="endDrag" @mouseleave="endDrag">
-            <g :transform="`translate(${panX} ${panY}) scale(${zoom})`">
-              <g v-for="edge in data.edges" :key="`${edge.source}-${edge.target}`">
-                <line v-if="coordinates.has(edge.source) && coordinates.has(edge.target)" :x1="coordinates.get(edge.source).x" :y1="coordinates.get(edge.source).y" :x2="coordinates.get(edge.target).x" :y2="coordinates.get(edge.target).y" class="tree-edge" :class="{ chosen: selectedId && (selectedId === edge.source || selectedId === edge.target) }" />
-              </g>
-              <g v-for="generation in maxGeneration + 1" :key="generation">
-                <line :x1="70 + (generation - 1) / Math.max(maxGeneration, 1) * (chartWidth - 150)" y1="28" :x2="70 + (generation - 1) / Math.max(maxGeneration, 1) * (chartWidth - 150)" :y2="Math.max(chartHeight, 480) - 20" class="generation-guide" />
-                <text :x="70 + (generation - 1) / Math.max(maxGeneration, 1) * (chartWidth - 150)" y="19" text-anchor="middle" class="axis-label">第 {{ generation - 1 }} 代</text>
-              </g>
-              <g v-for="node in nodes" :key="node.id" class="tree-node" :class="{ chosen: selectedId === node.id, highlighted: isHighlighted(node) }" @click="selectNode(node.id)" @dblclick="openProgram(node)">
+        <div ref="scrollBox" class="svg-scroll">
+          <svg :viewBox="`0 0 ${activeTreeSize.width} ${activeTreeSize.height}`" class="tree-chart" :style="chartStyle" role="img" :aria-label="treeMode === 'iterations' ? '轮次演化树' : '程序演化树'" @wheel.prevent="onWheel" @mousedown="startDrag" @mousemove="onDrag" @mouseup="endDrag" @mouseleave="endDrag">
+            <g :transform="chartTransform">
+              <template v-if="treeMode === 'iterations'">
+                <path
+                  v-for="edge in iterationTree.edges"
+                  :key="edge.id"
+                  :d="edgePath(edge.source, edge.target)"
+                  class="tree-edge"
+                  :class="{ failed: edge.target.item.status !== 'completed' }"
+                />
+                <g
+                  v-for="row in iterationTree.rows"
+                  :key="row.item.program_id"
+                  class="tree-node"
+                  @click="row.item.program_id && selectNode(row.item.program_id)"
+                  @dblclick="openProgramHere(row.item.program_id)"
+                  @mouseenter="showTip($event, tipForIteration(row.item))"
+                  @mousemove="moveTip"
+                  @mouseleave="hideTip"
+                >
+                  <title>第 {{ row.item.iteration }} 轮 · {{ row.item.program_id }} · {{ row.item.status === "completed" ? "成功" : "失败" }} · 分数 {{ iterationScore(row.item) ?? "—" }}</title>
+                  <rect
+                    :x="row.x - 14"
+                    :y="row.y - 14"
+                    width="28"
+                    height="28"
+                    rx="9"
+                    :fill="fillForIteration(row.item)"
+                    :stroke="row.item.status === 'completed' ? '#c3ccdb' : '#c14242'"
+                    :stroke-width="row.item.status === 'completed' ? 1.5 : 2.5"
+                  />
+                  <text :x="row.x" :y="row.y + 4" class="node-badge" text-anchor="middle">{{ row.item.iteration }}</text>
+                  <text :x="row.x + 21" :y="row.y - 2" class="node-title">{{ String(row.item.program_id).slice(0, 8) }}</text>
+                  <text :x="row.x + 21" :y="row.y + 11" class="node-score" :class="{ failed: row.item.status !== 'completed' }">
+                    {{ iterationScore(row.item) === null ? (row.item.status === "completed" ? "无指标" : "失败") : iterationScore(row.item).toFixed(2) }}
+                  </text>
+                </g>
+              </template>
+              <template v-else>
+              <path
+                v-for="edge in treeLayout.edges"
+                :key="`${edge.source}-${edge.target}`"
+                :d="edgePath(nodePosition(edge.source), nodePosition(edge.target))"
+                class="tree-edge"
+                :class="{ chosen: selectedId && (selectedId === edge.source || selectedId === edge.target), elite: isEliteEdge(edge) }"
+              />
+              <g
+                v-for="node in nodes"
+                :key="node.id"
+                class="tree-node"
+                :class="{ chosen: selectedId === node.id, highlighted: isHighlighted(node) }"
+                @click="selectNode(node.id)"
+                @dblclick="openProgramHere(node.id)"
+                @mouseenter="showTip($event, tipForNode(node))"
+                @mousemove="moveTip"
+                @mouseleave="hideTip"
+              >
                 <title>{{ node.id }} · 岛屿 {{ node.island }} · 第 {{ node.generation }} 代 · {{ activeMetric }}: {{ scoreLabel(node) }}</title>
-                <circle :cx="coordinates.get(node.id)?.x" :cy="coordinates.get(node.id)?.y" :r="isHighlighted(node) ? 14 : 10" :fill="isHighlighted(node) ? '#e8a63b' : islandColor(node)" />
-                <text :x="coordinates.get(node.id)?.x + 16" :y="coordinates.get(node.id)?.y + 4" class="node-label">{{ scoreLabel(node) }}</text>
+                <rect
+                  :x="nodePosition(node.id)?.x - 13"
+                  :y="nodePosition(node.id)?.y - 13"
+                  width="26"
+                  height="26"
+                  rx="9"
+                  :fill="isHighlighted(node) ? '#e8a63b' : scoreFill(node)"
+                  :stroke="elitePath.has(node.id) ? '#e8a63b' : (selectedId === node.id ? '#315fce' : islandColor(node))"
+                  :stroke-width="elitePath.has(node.id) ? 3.5 : (selectedId === node.id ? 2.5 : 2)"
+                />
+                <text :x="nodePosition(node.id)?.x" :y="nodePosition(node.id)?.y + 4" class="node-badge" text-anchor="middle">{{ node.island }}</text>
+                <text :x="nodePosition(node.id)?.x + 20" :y="nodePosition(node.id)?.y - 2" class="node-title">
+                  轮{{ node.iteration_found ?? "—" }} · {{ String(node.id).slice(0, 8) }}
+                </text>
+                <text :x="nodePosition(node.id)?.x + 20" :y="nodePosition(node.id)?.y + 11" class="node-score">{{ scoreLabel(node) }}</text>
               </g>
+              </template>
             </g>
           </svg>
         </div>
@@ -516,6 +850,54 @@ onUnmounted(() => {
         <NodeDetail :node="selected" :nodes="nodes" :archive="data.archive || []" :metric="activeMetric" @close="selectedId = ''" @open="openProgram" />
       </aside>
     </div>
+
+    <section v-else-if="view === 'iterations'" class="card chart-card">
+      <div class="chart-heading">
+        <div><h2>演化岛屿与轮次明细</h2><p>各岛屿精英概览 + 每轮的父子关系、耗时与指标</p></div>
+        <span class="count-pill">{{ iterations.length }} 轮 · {{ islands.length }} 个岛屿</span>
+      </div>
+
+      <div v-if="islands.length" class="island-grid">
+        <article v-for="island in islands" :key="island.index" class="island-card">
+          <header><strong>岛屿 {{ island.index }}</strong><span>第 {{ island.generation }} 代</span></header>
+          <div class="island-stats">
+            <div><small>程序</small><b>{{ island.programs }}</b></div>
+            <div><small>最高分</small><b>{{ Number(island.best_score).toFixed(4) }}</b></div>
+            <div><small>平均分</small><b>{{ Number(island.avg_score).toFixed(4) }}</b></div>
+            <div><small>多样性</small><b>{{ Number(island.diversity).toFixed(2) }}</b></div>
+          </div>
+          <p v-if="island.best_program_id" class="island-best">最优 <code>{{ island.best_program_id }}</code></p>
+        </article>
+      </div>
+
+      <p v-if="!iterations.length" class="empty-hint">还没有解析到完成的轮次。</p>
+      <div v-else class="table-scroll">
+        <table class="iteration-table">
+          <thead>
+            <tr><th>轮次</th><th>状态</th><th>岛屿</th><th>程序</th><th>父程序</th><th>耗时</th><th>指标</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in iterations" :key="item.iteration">
+              <td>{{ item.iteration }}</td>
+              <td>
+                <span class="iteration-state" :class="item.status">{{ item.status === "completed" ? "成功" : "失败" }}</span>
+              </td>
+              <td>{{ item.island ?? "—" }}</td>
+              <td class="mono">
+                <RouterLink v-if="item.program_id" :to="programLink(item.program_id)">{{ item.program_id.slice(0, 8) }}</RouterLink>
+                <span v-else>—</span>
+              </td>
+              <td class="mono">
+                <RouterLink v-if="item.parent_id" :to="programLink(item.parent_id)">{{ item.parent_id.slice(0, 8) }}</RouterLink>
+                <span v-else>—</span>
+              </td>
+              <td>{{ item.duration_seconds ? `${Number(item.duration_seconds).toFixed(1)}s` : "—" }}</td>
+              <td class="mono metrics-cell">{{ item.metrics_text || item.error || "—" }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
     <section v-else-if="view === 'trend'" class="card chart-card">
       <div class="chart-heading">
@@ -592,12 +974,13 @@ onUnmounted(() => {
         <div><small>结果</small><strong>{{ visibleNodes.length }} / {{ nodes.length }}</strong></div>
       </div>
       <div ref="listContainer" class="program-list" tabindex="0" aria-label="程序列表，可用上下方向键切换" @keydown="onListKeydown">
-        <article v-for="(node, index) in visibleNodes" :key="node.id" class="program-row" :class="{ active: selectedId === node.id, highlighted: isHighlighted(node) }" @click="selectNode(node.id)">
+        <article v-for="(node, index) in visibleNodes" :key="node.id" class="program-row" :class="{ active: selectedId === node.id, highlighted: isHighlighted(node), elite: elitePath.has(node.id) }" @click="selectNode(node.id)">
           <span class="program-rank">#{{ index + 1 }}</span>
           <div class="program-main">
             <div class="score-line">
               <span class="score-name">{{ activeMetric }}:</span>
               <b class="mono">{{ scoreLabel(node) }}</b>
+              <span v-if="elitePath.has(node.id)" class="elite-badge" title="位于最优节点到根的进化路径上">最优路径</span>
               <span class="score-bar"><i :style="{ width: `${barRatio(node, activeMetric) * 100}%`, background: barColor(barRatio(node, activeMetric)) }"></i></span>
             </div>
             <dl class="program-facts">
@@ -620,6 +1003,12 @@ onUnmounted(() => {
       </div>
       <NodeDetail v-if="selected" :node="selected" :nodes="nodes" :archive="data.archive || []" :metric="activeMetric" @close="selectedId = ''" @open="openProgram" />
     </section>
+
+    <div v-if="hoverTip" class="node-tip" :style="{ left: `${hoverTip.x + 16}px`, top: `${hoverTip.y + 16}px` }">
+      <div v-for="[label, value] in hoverTip.rows" :key="label" class="tip-row">
+        <small>{{ label }}</small><b>{{ value }}</b>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -725,16 +1114,25 @@ export default { components: { NodeDetail } };
 .check-control input { accent-color:var(--accent); }
 .refresh-label { display:flex; align-items:center; gap:7px; margin-left:auto; color:var(--muted); font-size:11px; }
 .live-dot { width:7px; height:7px; border-radius:50%; background:#37a775; box-shadow:0 0 0 3px #37a77520; }
-.workspace { display:grid; grid-template-columns:minmax(0,1fr) minmax(310px,360px); gap:16px; align-items:start; }
+/* 图表占满整行，与上方控制栏同宽；选中程序的详情放到图表下方 */
+.workspace { display:grid; grid-template-columns:minmax(0,1fr); gap:16px; align-items:start; }
 .chart-card { min-width:0; overflow:hidden; }
 .chart-heading { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:20px 22px 14px; }
 .chart-heading h2 { margin:0; font-size:15px; }
 .chart-heading p { margin:5px 0 0; color:var(--muted); font-size:11px; }
 .count-pill { padding:6px 10px; border-radius:100px; background:#f3f5fa; color:#65728a; font-size:11px; white-space:nowrap; }
-.svg-scroll { overflow:auto; border-top:1px solid #f0f2f6; }
+.svg-scroll { overflow:auto; min-height:620px; max-height:86vh; border-top:1px solid #f0f2f6; }
 .tree-chart { display:block; width:100%; min-width:760px; }
-.tree-edge { stroke:#c9d1df; stroke-width:1.5; }
-.tree-edge.chosen { stroke:#e8a63b; stroke-width:2.5; }
+.tree-edge { fill:none; stroke:#c9d1df; stroke-width:1.5; }
+.tree-edge.chosen { stroke:#315fce; stroke-width:2.5; }
+.tree-edge.elite { stroke:#e8a63b; stroke-width:3.2; }
+.tree-edge.failed { stroke:#e3b3b3; stroke-dasharray:4 4; }
+.node-score.failed { fill:#c14242; }
+.zoom-controls .button.selected { border-color:var(--accent); background:#eef3ff; color:var(--accent); }
+.node-tip { position:fixed; z-index:200; min-width:190px; max-width:320px; padding:9px 11px; border-radius:9px; background:#101828f2; box-shadow:0 8px 24px #10182840; color:#e8edf7; pointer-events:none; }
+.tip-row { display:flex; align-items:baseline; justify-content:space-between; gap:12px; font-size:10px; line-height:1.7; }
+.tip-row small { color:#9fb0cc; }
+.tip-row b { font-weight:600; overflow-wrap:anywhere; }
 .generation-guide { stroke:#e9edf3; stroke-dasharray:3 5; }
 .axis-label { fill:#8792a5; font-size:11px; }
 .tree-node { cursor:pointer; }
@@ -742,6 +1140,20 @@ export default { components: { NodeDetail } };
 .tree-node:hover circle, .tree-node.chosen circle { r:15; stroke:#263b79; }
 .tree-node.highlighted circle { stroke:#e59e2d; stroke-width:3; }
 .node-label { fill:#68748a; font-size:10px; pointer-events:none; }
+.node-badge { fill:#fff; font-size:10px; font-weight:700; pointer-events:none; }
+.node-title { fill:#3a4658; font-size:10px; font-weight:600; pointer-events:none; }
+.node-score { fill:#178454; font-size:10px; font-weight:700; font-family:"IBM Plex Mono",monospace; pointer-events:none; }
+.table-scroll { max-height:420px; overflow:auto; margin-top:12px; }
+.iteration-table { width:100%; border-collapse:collapse; font-size:11px; }
+.iteration-table th { position:sticky; top:0; padding:7px 8px; border-bottom:1px solid var(--line); background:#f8f9fc; color:#78849a; font-size:10px; text-align:left; }
+.iteration-table td { padding:7px 8px; border-bottom:1px solid #f0f2f6; }
+.iteration-table tbody tr:hover { background:#fafbfe; }
+.iteration-table a { color:var(--accent); text-decoration:none; }
+.iteration-table a:hover { text-decoration:underline; }
+.metrics-cell { max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.iteration-state { padding:3px 7px; border-radius:100px; background:#eef1f5; color:#68748a; font-size:9px; font-weight:700; }
+.iteration-state.completed { background:#e7f7ef; color:#178454; }
+.iteration-state.failed { background:#fff0f0; color:#c14242; }
 .detail-card { position:sticky; top:92px; overflow:hidden; }
 .node-detail { padding:18px; }
 .detail-head { display:flex; justify-content:space-between; align-items:center; }
@@ -809,6 +1221,9 @@ export default { components: { NodeDetail } };
 .program-row { display:flex; align-items:flex-start; gap:16px; padding:14px 18px; border-bottom:1px solid #eef1f6; background:#fff; cursor:pointer; }
 .program-row:hover, .program-row.active { background:#f5f7fc; }
 .program-row.highlighted { box-shadow:inset 3px 0 0 #e59e2d; }
+.program-row.elite { background:#fffaf0; box-shadow:inset 3px 0 0 #e8a63b; }
+.program-row.elite:hover, .program-row.elite.active { background:#fdf3dd; }
+.elite-badge { padding:2px 7px; border-radius:100px; background:#f7e2b0; color:#7a5206; font-size:9px; font-weight:700; white-space:nowrap; }
 .program-rank { min-width:34px; padding-top:2px; color:#8792a5; font:700 13px "IBM Plex Mono",monospace; }
 .program-row.highlighted .program-rank { color:#a46a0b; }
 .program-main { display:flex; min-width:220px; flex:1; flex-direction:column; gap:8px; }

@@ -178,6 +178,7 @@ onUnmounted(() => {
       <div class="detail-actions">
         <button class="button" :disabled="acting || !isRunning" @click="cancelRun">■ 停止运行</button>
         <button class="button" :disabled="acting" @click="exportRun">⤓ 静态导出</button>
+        <RouterLink class="button" :to="{ path: '/code', query: { run_id: runId } }">查看代码</RouterLink>
         <RouterLink class="button primary" :to="{ path: '/', query: { run_id: runId } }">查看可视化</RouterLink>
       </div>
     </div>
@@ -221,6 +222,8 @@ onUnmounted(() => {
             <div><dt>模板</dt><dd>{{ templateLabel }}</dd></div>
             <div><dt>模型</dt><dd class="mono">{{ detail.model || "—" }}</dd></div>
             <div><dt>计划轮数</dt><dd>{{ plannedIterations || "—" }}</dd></div>
+            <div><dt>任务目录</dt><dd class="mono">{{ detail.run_dir || "—" }}</dd></div>
+            <div><dt>输入目录</dt><dd class="mono">{{ detail.run_dir ? `${detail.run_dir}/input` : "—" }}</dd></div>
             <div><dt>输出目录</dt><dd class="mono">{{ detail.output_dir || "—" }}</dd></div>
             <div v-if="resumedFrom"><dt>续跑来源</dt><dd class="mono">{{ resumedFrom }}</dd></div>
             <div><dt>更新时间</dt><dd>{{ detail.updated_at || "—" }}</dd></div>
@@ -251,40 +254,6 @@ onUnmounted(() => {
           </ul>
         </section>
       </div>
-
-      <section class="card">
-        <h2 class="card-title">每轮明细
-          <span class="log-size">共 {{ iterations.length }} 轮</span>
-        </h2>
-        <p v-if="!iterations.length" class="empty-hint">日志里还没有解析到完成的轮次。</p>
-        <div v-else class="table-scroll">
-          <table class="iteration-table">
-            <thead>
-              <tr><th>轮次</th><th>状态</th><th>程序</th><th>父程序</th><th>耗时</th><th>token</th><th>指标</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in iterations" :key="item.iteration">
-                <td>{{ item.iteration }}</td>
-                <td>
-                  <span class="iteration-state" :class="item.status">{{ item.status === "completed" ? "成功" : "失败" }}</span>
-                </td>
-                <td class="mono">
-                  <RouterLink v-if="item.program_id" :to="programLink(item.program_id)">{{ item.program_id.slice(0, 8) }}</RouterLink>
-                  <span v-else>—</span>
-                </td>
-                <td class="mono">
-                  <RouterLink v-if="item.parent_id" :to="programLink(item.parent_id)">{{ item.parent_id.slice(0, 8) }}</RouterLink>
-                  <span v-else>—</span>
-                </td>
-                <td>{{ durationText(item) }}</td>
-                <td>{{ tokenText(item) }}</td>
-                <td class="mono metrics-cell">{{ item.metrics_text || item.error || "—" }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
       <section class="card log-card">
         <h2 class="card-title">运行日志
           <span class="log-size">{{ (logSize / 1024).toFixed(1) }} KB</span>
@@ -313,7 +282,7 @@ onUnmounted(() => {
 
 <style scoped>
 .detail-actions { display:flex; flex-wrap:wrap; gap:8px; }
-.run-progress { padding:16px 18px; margin-bottom:16px; }
+.run-progress { margin-bottom:16px; }
 .card-title { margin:0 0 12px; font-size:14px; }
 .progress-head { display:flex; align-items:center; justify-content:space-between; gap:14px; }
 .progress-head h2 { margin:2px 0 0; font-size:14px; }
@@ -332,34 +301,15 @@ onUnmounted(() => {
 .progress-stats small, .info-list dt, .island-stats small { color:var(--muted); font-size:10px; }
 .progress-stats strong { font-size:12px; overflow-wrap:anywhere; }
 .progress-last { margin:12px 0 0; color:#57647a; font-size:11px; overflow-wrap:anywhere; }
-.table-scroll { max-height:340px; overflow:auto; }
-.iteration-table { width:100%; border-collapse:collapse; font-size:11px; }
-.iteration-table th { position:sticky; top:0; padding:7px 8px; border-bottom:1px solid var(--line); background:#f8f9fc; color:#78849a; font-size:10px; text-align:left; }
-.iteration-table td { padding:7px 8px; border-bottom:1px solid #f0f2f6; vertical-align:middle; }
-.iteration-table tbody tr:hover { background:#fafbfe; }
-.iteration-table a { color:var(--accent); text-decoration:none; }
-.iteration-table a:hover { text-decoration:underline; }
-.metrics-cell { max-width:230px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.iteration-state { padding:3px 7px; border-radius:100px; background:#eef1f5; color:#68748a; font-size:9px; font-weight:700; }
-.iteration-state.completed { background:#e7f7ef; color:#178454; }
-.iteration-state.failed { background:#fff0f0; color:#c14242; }
-.island-card { padding:12px; border:1px solid var(--line); border-radius:10px; background:#fafbfe; }
-.island-card header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
-.island-card header strong { font-size:12px; }
-.island-card header span { color:var(--muted); font-size:10px; }
-.island-stats { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-top:10px; }
-.island-stats > div { display:flex; flex-direction:column; gap:2px; }
-.island-stats b { font-size:12px; }
-.island-best { margin:10px 0 0; color:var(--muted); font-size:10px; overflow-wrap:anywhere; }
-.island-best code { font-size:10px; }
-.detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
+.detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; align-items:start; }
 .info-list { margin:0; }
 .info-list > div { display:grid; grid-template-columns:88px 1fr; gap:10px; align-items:baseline; padding:8px 0; border-bottom:1px solid #f0f2f6; }
 .info-list > div:last-child { border-bottom:0; }
 .info-list dt { color:#78849a; font-size:11px; font-weight:600; }
 .info-list dd { margin:0; font-size:12px; overflow-wrap:anywhere; }
 .card-hint { margin-left:8px; color:#9aa4b6; font-weight:400; font-size:10px; }
-.checkpoint-list, .file-list { margin:0; padding:0; list-style:none; }
+.checkpoint-list { margin:0; padding:0; list-style:none; max-height:320px; overflow:auto; }
+.file-list { margin:0; padding:0; list-style:none; }
 .checkpoint-list li { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid #f0f2f6; }
 .checkpoint-list li:last-child { border-bottom:0; }
 .checkpoint-list strong { font-size:11px; }

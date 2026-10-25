@@ -1,4 +1,5 @@
 import { createApp } from "vue";
+import Antd from "ant-design-vue";
 import { createRouter, createWebHistory } from "vue-router";
 import App from "./App.vue";
 import EvolutionView from "./views/EvolutionView.vue";
@@ -6,6 +7,7 @@ import ManualView from "./views/ManualView.vue";
 import RunsView from "./views/RunsView.vue";
 import RunDetailView from "./views/RunDetailView.vue";
 import ProgramView from "./views/ProgramView.vue";
+import CodeView from "./views/CodeView.vue";
 import "./style.css";
 
 const router = createRouter({
@@ -17,6 +19,7 @@ const router = createRouter({
     { path: "/runs", component: RunsView },
     { path: "/runs/:id", component: RunDetailView },
     { path: "/program/:id", component: ProgramView },
+    { path: "/code", component: CodeView },
   ],
 });
 
@@ -24,7 +27,8 @@ const router = createRouter({
 // 否则后端会回落到 examples/ 下的旧示例数据。
 router.beforeEach((to) => {
   if (to.path === "/" && !to.query.run_id) return { path: "/runs" };
+  if (to.path === "/code" && !to.query.run_id) return { path: "/runs" };
   return true;
 });
 
-createApp(App).use(router).mount("#app");
+createApp(App).use(router).use(Antd).mount("#app");

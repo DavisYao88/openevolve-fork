@@ -39,6 +39,18 @@ export const api = {
   runInputFile(runId, name) {
     return request(`/api/runs/${encodeURIComponent(runId)}/input/${encodeURIComponent(name)}`);
   },
+  runOutputFile(runId, name) {
+    return request(`/api/runs/${encodeURIComponent(runId)}/output/${encodeURIComponent(name)}`);
+  },
+  runProgram(runId, programId) {
+    return request(`/api/runs/${encodeURIComponent(runId)}/program/${encodeURIComponent(programId)}`);
+  },
+  runFiles(runId) {
+    return request(`/api/runs/${encodeURIComponent(runId)}/files`);
+  },
+  runFile(runId, path) {
+    return request(`/api/runs/${encodeURIComponent(runId)}/file?path=${encodeURIComponent(path)}`);
+  },
   runCheckpoints(runId) {
     return request(`/api/runs/${encodeURIComponent(runId)}/checkpoints`);
   },
