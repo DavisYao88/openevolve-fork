@@ -9,6 +9,7 @@ from flask import Blueprint, abort, jsonify, request
 from ..secrets import (
     _load_gui_settings,
     _load_secrets,
+    _normalize_provider,
     _public_settings,
     _save_gui_settings,
     _save_secrets,
@@ -42,16 +43,29 @@ def gui_settings_api():
         for key in ("provider", "api_base", "primary_model"):
             if isinstance(incoming.get(key), str):
                 llm[key] = incoming[key].strip()
-        # Key 只写独立 secrets 文件，不进入任何配置
+        # Key 只写独立 secrets 文件，并按供应商分桶：新增供应商即新增一个 Key
+        provider_name = _normalize_provider(llm.get("provider"))
         api_key = incoming.get("api_key")
         if isinstance(api_key, str) and api_key.strip():
             secrets = _load_secrets()
-            secrets["api_key"] = api_key.strip()
+            secrets.pop("api_key", None)  # 旧版单 Key 已迁移进分桶
             secrets.pop("models", None)
+            keys = secrets.get("provider_keys")
+            if not isinstance(keys, dict):
+                keys = {}
+            keys[provider_name] = api_key.strip()
+            secrets["provider_keys"] = keys
             _save_secrets(secrets)
         if incoming.get("clear_api_key"):
             secrets = _load_secrets()
-            secrets["api_key"] = ""
+            secrets.pop("api_key", None)
+            keys = secrets.get("provider_keys")
+            if isinstance(keys, dict):
+                keys.pop(provider_name, None)
+                if keys:
+                    secrets["provider_keys"] = keys
+                else:
+                    secrets.pop("provider_keys", None)
             _save_secrets(secrets)
         for key, cast in (("temperature", float), ("max_tokens", int)):
             if key in incoming:

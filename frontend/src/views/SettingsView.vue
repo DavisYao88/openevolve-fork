@@ -28,15 +28,57 @@ const saving = ref(false);
 const message = ref("");
 const error = ref("");
 
+// 各供应商各自的 Key（掩码），后端一次返回，切换供应商时直接查表
+const providerKeyMasks = ref({});
+const envKeyMasked = ref("");
+
+const providerLabel = computed(
+  () => PROVIDERS.find((item) => item.value === provider.value)?.label || provider.value
+);
+
+// 已存过 Key 的供应商，用于提示「各自独立、互不覆盖」
+const savedProviders = computed(() =>
+  Object.keys(providerKeyMasks.value)
+    .map((value) => PROVIDERS.find((item) => item.value === value)?.label || value)
+    .join("、")
+);
+
+// 切换到某个供应商时，刷新该供应商自己的 Key 状态（env 则全局生效）
+function refreshKeyState() {
+  if (apiKeySource.value === "env") {
+    hasApiKey.value = true;
+    apiKeyMasked.value = envKeyMasked.value;
+    return;
+  }
+  const masked = providerKeyMasks.value[provider.value] || "";
+  apiKeyMasked.value = masked;
+  hasApiKey.value = !!masked;
+}
+
 const keyHint = computed(() => {
-  if (!hasApiKey.value) return "尚未配置 API Key";
-  const where = apiKeySource.value === "env" ? "环境变量 / .env.local" : "本地 secrets 文件";
-  return `已保存：${apiKeyMasked.value}（来自${where}）`;
+  if (apiKeySource.value === "env") {
+    return `环境变量 / .env.local 里的 Key 对所有供应商生效：${envKeyMasked.value}`;
+  }
+  if (!hasApiKey.value) return `「${providerLabel.value}」尚未配置 API Key`;
+  return `「${providerLabel.value}」已保存：${apiKeyMasked.value}（来自本地 secrets 文件）`;
 });
 
 const placeholder = computed(() => {
+  if (apiKeySource.value === "env") return `环境变量已生效：${envKeyMasked.value}（留空不修改）`;
   if (hasApiKey.value) return `已保存：${apiKeyMasked.value}（留空不修改）`;
   return "粘贴 API Key";
+});
+
+// 说明 Key 存在哪、怎么注入（每个供应商各一把，互不覆盖）
+const keyNote = computed(() => {
+  const tail = "任务配置里只写 ${OPENEVOLVE_API_KEY} 占位符，运行时由子进程环境变量注入。";
+  if (apiKeySource.value === "env") {
+    return `当前生效的是环境变量 / .env.local（已 gitignore），优先级最高，对所有供应商都生效；${tail}`;
+  }
+  if (hasApiKey.value) {
+    return `「${providerLabel.value}」的 Key 保存在本机 evolve_tasks/llm_secrets.json（600 权限、已 gitignore），接口只回传掩码；每个供应商各存一把，切换不会覆盖其他供应商；${tail}`;
+  }
+  return `还没有「${providerLabel.value}」的可用 Key：可以在本页保存，或在 .env.local 里设置 OPENEVOLVE_API_KEY。每个供应商的 Key 单独保存；${tail}`;
 });
 
 function applyTheme(value) {
@@ -48,6 +90,8 @@ function applyTheme(value) {
 
 function pickProvider() {
   const preset = PROVIDERS.find((item) => item.value === provider.value);
+  refreshKeyState();
+  apiKey.value = "";
   if (!preset) return;
   if (preset.apiBase) apiBase.value = preset.apiBase;
   if (preset.model && !modelName.value) modelName.value = preset.model;
@@ -58,9 +102,12 @@ function applySettings(data) {
   provider.value = llm.provider || "deepseek";
   modelName.value = llm.primary_model || "";
   apiBase.value = llm.api_base || "";
-  hasApiKey.value = !!llm.has_api_key;
-  apiKeyMasked.value = llm.api_key_masked || "";
   apiKeySource.value = llm.api_key_source || "";
+  providerKeyMasks.value = llm.provider_keys || {};
+  // 后端未返回 env 掩码时退回当前生效掩码（env 模式下二者等价）
+  envKeyMasked.value =
+    llm.env_api_key_masked || (llm.api_key_source === "env" ? llm.api_key_masked : "") || "";
+  refreshKeyState();
   envFile.value = !!llm.env_file;
   temperature.value = llm.temperature ?? "0.6";
   maxTokens.value = llm.max_tokens ?? "16000";
@@ -90,11 +137,20 @@ async function save() {
       temperature: temperature.value,
       max_tokens: maxTokens.value,
     };
-    if (apiKey.value.trim()) payload.api_key = apiKey.value.trim();
+    const typedKey = apiKey.value.trim();
+    if (typedKey) payload.api_key = typedKey;
     const data = await api.saveSettings({ theme: theme.value, llm: payload });
     apiKey.value = "";
     applySettings(data);
-    message.value = "已保存，下一次启动演化任务时生效。";
+    if (typedKey && apiKeySource.value === "env") {
+      message.value =
+        `已把 Key 存到「${providerLabel.value}」的槽位，但生效的仍是 .env.local / 环境变量里的 Key（优先级更高）。` +
+        "要改用本页保存的 Key，请先删掉 .env.local 里的 OPENEVOLVE_API_KEY。";
+    } else if (typedKey) {
+      message.value = `已为「${providerLabel.value}」保存 Key，下一次启动演化任务时生效。`;
+    } else {
+      message.value = "已保存，下一次启动演化任务时生效。";
+    }
   } catch (cause) {
     error.value = `保存失败：${cause.message}`;
   } finally {
@@ -153,7 +209,7 @@ onMounted(loadSettings);
 
       <section class="card">
         <h2>模型供应商</h2>
-        <p class="card-hint">单个模型，演化与校验都用它。</p>
+        <p class="card-hint">单个模型，演化与校验都用它；API Key 按供应商分别保存。</p>
 
         <div class="field-grid">
           <label class="field">
@@ -179,16 +235,14 @@ onMounted(loadSettings);
         </label>
 
         <label class="field">
-          <span>API Key</span>
+          <span>API Key（{{ providerLabel }}）</span>
           <input v-model="apiKey" class="text-input mono" type="password" autocomplete="off" :placeholder="placeholder" />
         </label>
         <p class="field-hint">{{ keyHint }}</p>
-        <p v-if="envFile" class="field-hint">检测到 <code>.env.local</code>：其中的 <code>OPENEVOLVE_API_KEY</code> 优先于本页保存的 Key。</p>
+        <p v-if="savedProviders" class="field-hint">已保存 Key 的供应商：{{ savedProviders }}（各自独立，切换不覆盖）。</p>
+        <p v-if="envFile" class="field-hint">检测到 <code>.env.local</code>：其中的 <code>OPENEVOLVE_API_KEY</code> 优先级高于本页保存的 Key，且对所有供应商都生效。</p>
 
-        <p class="field-hint">
-          Key 只写入本机 <code>evolve_tasks/llm_secrets.json</code>（600 权限、已 gitignore），接口只回传掩码；
-          任务配置里写的是 <code>${OPENEVOLVE_API_KEY}</code> 占位符，运行时由子进程环境变量注入。
-        </p>
+        <p class="field-hint">{{ keyNote }}</p>
       </section>
     </div>
   </section>

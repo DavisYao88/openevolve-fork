@@ -28,12 +28,36 @@ def _save_secrets(data: dict[str, Any]) -> None:
         pass
 
 
-def _current_api_key() -> str:
-    """优先级：环境变量 OPENEVOLVE_API_KEY > 本地 secrets 文件。"""
+DEFAULT_PROVIDER = "deepseek"
+
+
+def _normalize_provider(provider: Any) -> str:
+    """供应商名统一成小写；空值落到默认供应商，与设置页默认选项一致。"""
+    text = str(provider or "").strip().lower()
+    return text or DEFAULT_PROVIDER
+
+
+def _provider_keys(secrets: dict[str, Any]) -> dict[str, str]:
+    """读取 {供应商: key} 分桶，过滤掉空值与非字符串。"""
+    raw = secrets.get("provider_keys")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(name): value.strip()
+        for name, value in raw.items()
+        if isinstance(value, str) and value.strip()
+    }
+
+
+def _current_api_key(provider: Any = None) -> str:
+    """优先级：环境变量 OPENEVOLVE_API_KEY > 该供应商自己的 Key。
+
+    Key 按供应商分桶存放，切换供应商不会覆盖别人的 Key。
+    """
     env_key = (os.environ.get("OPENEVOLVE_API_KEY") or "").strip()
     if env_key:
         return env_key
-    return str(_load_secrets().get("api_key") or "")
+    return _provider_keys(_load_secrets()).get(_normalize_provider(provider), "")
 
 
 def _load_gui_settings() -> dict[str, Any]:
@@ -121,7 +145,20 @@ def _migrate_legacy_secrets() -> None:
             except OSError:
                 pass
 
-    if changed and secrets.get("api_key"):
+    # 旧版「单个 api_key」-> 归属到当前供应商的桶，之后每个供应商各存一把
+    legacy_single = secrets.pop("api_key", None)
+    if legacy_single is not None:
+        changed = True
+        if isinstance(legacy_single, str) and legacy_single.strip():
+            llm_settings = settings.get("llm")
+            provider = _normalize_provider(
+                llm_settings.get("provider") if isinstance(llm_settings, dict) else None
+            )
+            keys = _provider_keys(secrets)
+            keys.setdefault(provider, legacy_single.strip())
+            secrets["provider_keys"] = keys
+
+    if changed:
         _save_secrets(secrets)
 
 
@@ -131,7 +168,10 @@ def _mask_secret(value: str) -> str:
 
 
 def _public_settings() -> dict[str, Any]:
-    """单模型设置。key 只回掩码；env（.env.local / export）优先于本地 secrets。"""
+    """单模型设置 + 按供应商分桶的 Key 状态（Key 只回掩码）。
+
+    env（.env.local / export）对所有供应商都生效，且优先级高于本地 secrets。
+    """
     data = _load_gui_settings()
     llm = dict(data.get("llm") or {})
     llm.pop("api_key", None)
@@ -144,13 +184,18 @@ def _public_settings() -> dict[str, Any]:
     if env_model:
         llm["primary_model"] = env_model
 
-    key = _current_api_key()
+    provider = _normalize_provider(llm.get("provider"))
+    env_key = (os.environ.get("OPENEVOLVE_API_KEY") or "").strip()
+    provider_keys = _provider_keys(_load_secrets())
+    key = env_key or provider_keys.get(provider, "")
+
+    llm["provider"] = provider
     llm["has_api_key"] = bool(key)
     llm["api_key_masked"] = _mask_secret(key)
-    llm["api_key_source"] = (
-        "env" if (os.environ.get("OPENEVOLVE_API_KEY") or "").strip()
-        else ("secrets" if key else "")
-    )
+    llm["api_key_source"] = "env" if env_key else ("secrets" if key else "")
+    llm["env_api_key_masked"] = _mask_secret(env_key) if env_key else ""
+    # 各供应商已保存的 Key（掩码），设置页切供应商时直接复用，无需重新请求
+    llm["provider_keys"] = {name: _mask_secret(value) for name, value in provider_keys.items()}
     llm["env_file"] = (paths.PROJECT_ROOT / ".env.local").is_file()
     return {"theme": data.get("theme", "light"), "llm": llm}
 
@@ -177,7 +222,8 @@ def _apply_gui_llm_settings(config: dict[str, Any]) -> None:
         if isinstance(value, str) and value.strip():
             llm[key] = value.strip()
 
-    api_key = _current_api_key()
+    # 只取当前供应商自己的 Key，不同供应商互不影响
+    api_key = _current_api_key(llm.get("provider"))
     if api_key:
         llm["api_key"] = api_key
 

@@ -946,7 +946,7 @@ evaluator:
 - **评测脚本**只向 stdout 打印一个指标 JSON 对象（如 `{"wmape": 0.12, "bias_ratio": -0.02}`），日志写 stderr。
 - **objective** 把任意指标折算成 `combined_score`；多个指标按权重加权，惩罚项写成一条 `minimize` 指标即可。
 - **validation** 支持 `params_dict`（只允许改参数字典的值，带范围/布尔/枚举/交叉约束）与 `none`（自由改写算法）。
-- **模板**`solver/templates/` 自带 `famou-调参`、`param-tuning`、`generic-python` 三个模板，复制目录改 `template.yml` 即是新任务。
+- **模板**`solver/templates/` 自带 `famou-调参-v1`、`famou-调参-v2`、`param-tuning`、`generic-python` 四个模板，复制目录改 `template.yml` 即是新任务。
 
 详见 [solver/README.md](solver/README.md)。
 
