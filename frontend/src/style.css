@@ -133,3 +133,57 @@ a { color: inherit; text-decoration: none; }
   .header-actions { margin-left: auto; }
   .app-content { padding-top: 22px; }
 }
+
+/* ---------------------------------------------------------------------------
+   Ant Design Vue：下拉框/输入框与整体设计统一
+   （颜色走项目 CSS 变量，所以深浅色切换不需要额外覆盖）
+--------------------------------------------------------------------------- */
+.ant-select.text-input,
+.ant-select.select-input {
+  min-height: 34px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.ant-select .ant-select-selector {
+  border-radius: 8px !important;
+  border-color: var(--line) !important;
+  background: var(--surface) !important;
+  padding: 0 10px !important;
+}
+.ant-select-single .ant-select-selector { height: 34px !important; }
+.ant-select-single .ant-select-selector .ant-select-selection-item,
+.ant-select-single .ant-select-selector .ant-select-selection-placeholder {
+  line-height: 32px !important;
+  font-size: 12px;
+}
+.ant-select:not(.ant-select-disabled):hover .ant-select-selector { border-color: #7f99e5 !important; }
+.ant-select-focused:not(.ant-select-disabled) .ant-select-selector {
+  border-color: #7f99e5 !important;
+  box-shadow: 0 0 0 3px #385dcc21 !important;
+}
+.ant-select-arrow { color: var(--muted); font-size: 10px; }
+
+/* 下拉面板 */
+.oe-select-popup {
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 14px 34px #2536561f;
+}
+.oe-select-popup .ant-select-item {
+  margin: 1px 2px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.oe-select-popup .ant-select-item-option-active:not(.ant-select-item-option-selected) {
+  background: var(--accent-soft) !important;
+}
+.oe-select-popup .ant-select-item-option-selected {
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+  font-weight: 600;
+}

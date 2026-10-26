@@ -1,9 +1,21 @@
 <script setup>
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
+import { theme as antdTheme } from "ant-design-vue";
 
 const route = useRoute();
 const darkMode = ref(false);
+
+// Ant Design Vue 跟随页面深浅色，圆角/主色对齐 style.css 里的设计变量
+const themeConfig = computed(() => ({
+  algorithm: darkMode.value ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
+  token: {
+    colorPrimary: "#385dcc",
+    borderRadius: 8,
+    fontSize: 12,
+    controlHeight: 34,
+  },
+}));
 
 function applyTheme(enabled) {
   darkMode.value = enabled;
@@ -23,6 +35,7 @@ onMounted(() => {
 </script>
 
 <template>
+  <a-config-provider :theme="themeConfig">
   <div class="app-shell">
     <header class="app-header">
       <RouterLink class="brand" to="/runs">
@@ -49,4 +62,5 @@ onMounted(() => {
       <RouterView />
     </main>
   </div>
+  </a-config-provider>
 </template>

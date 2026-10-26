@@ -47,6 +47,27 @@ const chartHeight = computed(() => Math.max(480, nodes.value.length * 54 + 90));
 
 const runId = computed(() => route.query.run_id || "");
 const checkpoints = computed(() => data.value.checkpoints || []);
+
+// Ant Design 下拉框的选项
+const metricOptions = computed(() => metrics.value.map((name) => ({ label: name, value: name })));
+const highlightOptions = [
+  { label: "不高亮", value: "none" },
+  { label: "最高分", value: "top" },
+  { label: "初始代", value: "first" },
+  { label: "评测失败", value: "failed" },
+  { label: "指标缺失", value: "unset" },
+  { label: "精英档案", value: "archive" },
+];
+const checkpointOptions = computed(() => [
+  { label: "最新", value: "" },
+  ...checkpoints.value.map((item) => ({ label: `${item.name} · ${item.programs} 程序`, value: item.name })),
+]);
+const sortOptions = [
+  { label: "按指标排序", value: "score" },
+  { label: "按代数", value: "generation" },
+  { label: "按岛屿", value: "island" },
+  { label: "按 ID", value: "id" },
+];
 const featureMaps = computed(() => (data.value.feature_maps || []).filter((grid) => grid.cells?.length));
 const mapFitnessRange = computed(() => {
   const values = featureMaps.value
@@ -854,26 +875,33 @@ onUnmounted(() => {
 
     <div class="metric-controls card">
       <label>评分指标
-        <select v-model="metric" class="select-input" @change="saveMetric">
-          <option v-for="item in metrics" :key="item" :value="item">{{ item }}</option>
-        </select>
+        <a-select
+          v-model:value="metric"
+          class="select-input"
+          :options="metricOptions"
+          :dropdown-match-select-width="false"
+          popup-class-name="oe-select-popup"
+          @change="saveMetric"
+        />
       </label>
       <label>高亮规则
-        <select v-model="highlight" class="select-input">
-          <option value="none">不高亮</option>
-          <option value="top">最高分</option>
-          <option value="first">初始代</option>
-          <option value="failed">评测失败</option>
-          <option value="unset">指标缺失</option>
-          <option value="archive">精英档案</option>
-        </select>
+        <a-select
+          v-model:value="highlight"
+          class="select-input"
+          :options="highlightOptions"
+          :dropdown-match-select-width="false"
+          popup-class-name="oe-select-popup"
+        />
       </label>
       <label v-if="view !== 'list'" class="check-control"><input v-model="showIslands" type="checkbox">按岛屿分组</label>
       <label v-if="checkpoints.length" class="checkpoint-control">检查点
-        <select v-model="selectedCheckpoint" class="select-input">
-          <option value="">最新</option>
-          <option v-for="item in checkpoints" :key="item.name" :value="item.name">{{ item.name }} · {{ item.programs }} 程序</option>
-        </select>
+        <a-select
+          v-model:value="selectedCheckpoint"
+          class="select-input"
+          :options="checkpointOptions"
+          :dropdown-match-select-width="false"
+          popup-class-name="oe-select-popup"
+        />
       </label>
       <span class="refresh-label"><span class="live-dot"></span>每 3 秒刷新</span>
     </div>
@@ -1134,9 +1162,14 @@ onUnmounted(() => {
     <section v-else class="card list-card">
       <div class="list-toolbar">
         <input v-model="search" class="text-input" placeholder="搜索程序 ID…" aria-label="搜索程序 ID">
-        <select v-model="sort" class="select-input" aria-label="排序方式">
-          <option value="score">按指标排序</option><option value="generation">按代数</option><option value="island">按岛屿</option><option value="id">按 ID</option>
-        </select>
+        <a-select
+          v-model:value="sort"
+          class="select-input"
+          :options="sortOptions"
+          :dropdown-match-select-width="false"
+          popup-class-name="oe-select-popup"
+          aria-label="排序方式"
+        />
       </div>
       <div class="summary-row">
         <div><small>🏆 最高分</small><strong>{{ bestScore === null ? "—" : bestScore.toFixed(4) }}</strong><span class="summary-bar"><i :style="{ width: `${scoreRatio(bestScore) * 100}%` }"></i></span></div>
@@ -1196,13 +1229,6 @@ onUnmounted(() => {
           </p>
         </div>
         <div class="drawer-head-actions">
-          <button
-            class="button drawer-copy"
-            :class="drawerCopyState"
-            :disabled="codeDrawer.loading || !!codeDrawer.error || !codeDrawer.code"
-            :title="codeDrawer.code ? '复制完整代码到剪贴板' : '暂无可复制的代码'"
-            @click="copyDrawerCode"
-          >{{ drawerCopyState === "done" ? "已复制" : (drawerCopyState === "fail" ? "复制失败" : "复制代码") }}</button>
           <button class="button" @click="closeCode">✕</button>
         </div>
       </header>
@@ -1225,11 +1251,20 @@ onUnmounted(() => {
 
       <p v-if="codeDrawer.loading" class="drawer-hint">正在读取代码…</p>
       <p v-else-if="codeDrawer.error" class="message error">{{ codeDrawer.error }}</p>
-      <div v-else class="code-view drawer-code">
-        <div class="line-numbers">
-          <span v-for="(_, index) in drawerLines" :key="index">{{ index + 1 }}</span>
+      <div v-else class="drawer-code-wrap">
+        <button
+          class="button code-copy-float"
+          :class="drawerCopyState"
+          :disabled="!codeDrawer.code"
+          :title="codeDrawer.code ? '复制完整代码到剪贴板' : '暂无可复制的代码'"
+          @click="copyDrawerCode"
+        >{{ drawerCopyState === "done" ? "已复制" : (drawerCopyState === "fail" ? "复制失败" : "复制代码") }}</button>
+        <div class="code-view drawer-code">
+          <div class="line-numbers">
+            <span v-for="(_, index) in drawerLines" :key="index">{{ index + 1 }}</span>
+          </div>
+          <pre class="code-body"><code><span v-for="(line, index) in drawerLines" :key="index" class="code-line" v-html="highlightLine(line)"></span></code></pre>
         </div>
-        <pre class="code-body"><code><span v-for="(line, index) in drawerLines" :key="index" class="code-line" v-html="highlightLine(line)"></span></code></pre>
       </div>
 
       <footer class="drawer-foot">
@@ -1339,7 +1374,7 @@ export default { components: { NodeDetail } };
 .view-switch .button.selected { background:var(--accent-soft); color:var(--accent); }
 .metric-controls { display:flex; align-items:center; flex-wrap:wrap; gap:14px 24px; padding:12px 16px; margin-bottom:18px; }
 .metric-controls label { display:flex; align-items:center; gap:9px; color:var(--muted); font-size:12px; font-weight:600; }
-.metric-controls .select-input { width:auto; min-width:160px; min-height:34px; padding:6px 10px; font-size:12px; }
+.metric-controls .select-input { width:auto; min-width:160px; }
 .check-control input { accent-color:var(--accent); }
 .refresh-label { display:flex; align-items:center; gap:7px; margin-left:auto; color:var(--muted); font-size:11px; }
 .live-dot { width:7px; height:7px; border-radius:50%; background:#37a775; box-shadow:0 0 0 3px #37a77520; }
@@ -1370,9 +1405,13 @@ export default { components: { NodeDetail } };
 .code-drawer { position:fixed; top:0; right:0; z-index:320; display:flex; flex-direction:column; gap:10px; width:min(660px, 64vw); height:100vh; padding:18px 20px; background:var(--surface); border-left:1px solid var(--line); box-shadow:-18px 0 46px #10182826; }
 .drawer-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
 .drawer-head-actions { display:flex; flex:none; align-items:center; gap:8px; }
-.drawer-copy { white-space:nowrap; }
-.drawer-copy.done { border-color:#178454; color:#178454; }
-.drawer-copy.fail { border-color:#c14242; color:#c14242; }
+.drawer-code-wrap { position:relative; display:flex; flex:1; min-height:0; }
+/* 悬浮在代码区右上角，代码滚动时位置不变 */
+.code-copy-float { position:absolute; top:10px; right:16px; z-index:3; padding:4px 12px; border:1px solid #33415c; border-radius:8px; background:#1f2a3de6; color:#c6d2e6; font-size:11px; line-height:1.6; white-space:nowrap; backdrop-filter:blur(6px); }
+.code-copy-float:hover:not(:disabled) { border-color:#4b5c7d; background:#2a3750; color:#fff; }
+.code-copy-float.done { border-color:#178454; color:#57d99b; }
+.code-copy-float.fail { border-color:#c14242; color:#ff9494; }
+.drawer-code .code-body { padding-right:104px; }
 .drawer-head h3 { margin:4px 0 0; font-size:14px; display:flex; align-items:center; gap:8px; }
 .drawer-meta { margin:5px 0 0; color:var(--muted); font-size:10px; }
 .drawer-hint { margin:0; color:var(--muted); font-size:11px; }
@@ -1461,7 +1500,7 @@ export default { components: { NodeDetail } };
 .count-pill, .best-pill { flex:none; white-space:nowrap; }
 .tree-chart { cursor:grab; }
 .tree-chart:active { cursor:grabbing; }
-.checkpoint-control .select-input { width:auto; min-width:180px; min-height:34px; padding:6px 10px; font-size:12px; }
+.checkpoint-control .select-input { width:auto; min-width:180px; }
 .map-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; padding:4px 22px 18px; }
 .map-card { border:1px solid var(--line); border-radius:10px; padding:12px; background:#fafbfe; }
 .map-card header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:10px; }

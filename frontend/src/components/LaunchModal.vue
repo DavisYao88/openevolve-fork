@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { api } from "../api";
 
 const emit = defineEmits(["close", "started"]);
@@ -15,6 +15,17 @@ const loading = ref(true);
 const switching = ref(false);
 const submitting = ref(false);
 const error = ref("");
+
+// Ant Design 下拉框的选项
+const templateOptions = computed(() => templates.value.map((item) => ({ label: item.name, value: item.id })));
+const runOptions = computed(() => [
+  { label: "新建任务（不续跑）", value: "" },
+  ...runs.value.map((run) => ({ label: run.name || run.id, value: run.id })),
+]);
+const resumeCheckpointOptions = computed(() => [
+  { label: "最新检查点", value: "" },
+  ...resumeCheckpoints.value.map((item) => ({ label: `${item.name} · ${item.programs} 程序`, value: item.name })),
+]);
 
 function applyDefaults(defaults) {
   templates.value = defaults.templates || [];
@@ -110,9 +121,16 @@ onMounted(async () => {
           <div class="form-field">
             <label class="field-label" for="template">任务模板</label>
             <p class="field-hint">模板提供默认输入、评分方式与候选校验；切换模板会覆盖下方内容。</p>
-            <select id="template" v-model="form.template" class="text-input" :disabled="switching" @change="switchTemplate">
-              <option v-for="item in templates" :key="item.id" :value="item.id">{{ item.name }}</option>
-            </select>
+            <a-select
+              id="template"
+              v-model:value="form.template"
+              class="text-input"
+              :options="templateOptions"
+              :disabled="switching"
+              :dropdown-match-select-width="false"
+              popup-class-name="oe-select-popup"
+              @change="switchTemplate"
+            />
             <p v-if="templateDescription" class="field-hint">{{ templateDescription }}</p>
           </div>
           <div class="form-field">
@@ -140,14 +158,22 @@ onMounted(async () => {
           <label class="field-label" for="resume-run">从已有任务续跑</label>
           <p class="field-hint">可选。选定任务后默认从其最新检查点继续；也可指定某个检查点。</p>
           <div class="resume-row">
-            <select id="resume-run" v-model="resumeRun" class="text-input">
-              <option value="">新建任务（不续跑）</option>
-              <option v-for="run in runs" :key="run.id" :value="run.id">{{ run.name || run.id }}</option>
-            </select>
-            <select v-if="resumeRun" v-model="resumeCheckpoint" class="text-input">
-              <option value="">最新检查点</option>
-              <option v-for="item in resumeCheckpoints" :key="item.name" :value="item.name">{{ item.name }} · {{ item.programs }} 程序</option>
-            </select>
+            <a-select
+              id="resume-run"
+              v-model:value="resumeRun"
+              class="text-input"
+              :options="runOptions"
+              :dropdown-match-select-width="false"
+              popup-class-name="oe-select-popup"
+            />
+            <a-select
+              v-if="resumeRun"
+              v-model:value="resumeCheckpoint"
+              class="text-input"
+              :options="resumeCheckpointOptions"
+              :dropdown-match-select-width="false"
+              popup-class-name="oe-select-popup"
+            />
           </div>
         </div>
         <details class="advanced">

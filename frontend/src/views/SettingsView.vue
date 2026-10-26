@@ -10,6 +10,8 @@ const PROVIDERS = [
   { value: "custom", label: "自定义（OpenAI 兼容）", apiBase: "", model: "" },
 ];
 
+const providerOptions = PROVIDERS.map((item) => ({ label: item.label, value: item.value }));
+
 const theme = ref(localStorage.getItem("openevolve.theme") === "dark" ? "dark" : "light");
 const provider = ref("deepseek");
 const modelName = ref("");
@@ -156,9 +158,14 @@ onMounted(loadSettings);
         <div class="field-grid">
           <label class="field">
             <span>供应商</span>
-            <select v-model="provider" class="select-input" @change="pickProvider">
-              <option v-for="item in PROVIDERS" :key="item.value" :value="item.value">{{ item.label }}</option>
-            </select>
+            <a-select
+              v-model:value="provider"
+              class="select-input"
+              :options="providerOptions"
+              :dropdown-match-select-width="false"
+              popup-class-name="oe-select-popup"
+              @change="pickProvider"
+            />
           </label>
           <label class="field">
             <span>模型名</span>
