@@ -234,12 +234,15 @@ def run_api():
             "id": run_id,
             "status": "running",
             "process": process,
+            "pid": process.pid,
             "run_dir": str(run_dir),
             "output_dir": str(output_dir),
             "log_path": str(log_path),
+            "started_at": datetime.now().isoformat(timespec="seconds"),
         }
         state.current_run = current_run
-        state.active_runs[run_id] = current_run
+        # 注册表落盘：服务重启后靠 pid + 任务目录找回这个子进程
+        state.register_run(run_id, current_run)
         return jsonify({"run": _current_run_status()}), 202
     finally:
         state.run_lock.release()

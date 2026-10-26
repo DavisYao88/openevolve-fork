@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import signal
 from pathlib import Path
 from typing import Any, Optional
 
@@ -27,6 +26,7 @@ from ..runs import (
     _resolve_run_dir,
     _run_progress,
     _run_summary,
+    _terminate_run,
 )
 from .common import _is_local_request
 
@@ -305,23 +305,26 @@ def run_cancel_api(run_id):
         return jsonify({"error": f"找不到任务：{run_id}"}), 404
 
     _reap_finished_runs()
-    run = state.active_runs.get(run_id)
+    run = state.get_run(run_id)
     if run is None and state.current_run is not None and state.current_run.get("id") == run_id:
         run = state.current_run
     if run is None:
         return jsonify({"error": "该任务不是由本服务启动，或已经结束。"}), 409
 
-    process = run["process"]
-    if process.poll() is not None:
+    process = run.get("process")
+    pid = run.get("pid") or (process.pid if process is not None else None)
+    if process is not None and process.poll() is not None:
         return jsonify({"error": "该任务已经结束。"}), 409
+    if not isinstance(pid, int):
+        return jsonify({"error": "该任务没有可用的进程信息。"}), 409
+    if process is None and not state.pid_runs_task(pid, run_id):
+        # 服务重启后接管的任务：pid 已消失或已被别的进程复用
+        return jsonify({"error": "该任务已经结束，或进程已不在。"}), 409
 
-    try:
-        # The child was started with start_new_session=True, so kill the group.
-        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-    except (ProcessLookupError, PermissionError, OSError) as error:
-        logger.warning("Could not terminate run %s: %s", run_id, error)
-        return jsonify({"error": f"无法终止任务：{error}"}), 500
+    if not _terminate_run(pid, run_id, process):
+        return jsonify({"error": "无法终止任务：进程已不存在。"}), 409
 
     run["status"] = "interrupted"
+    state.flush_registry()
     logger.info("Cancelled evolution run %s", run_id)
     return jsonify({"run": _current_run_status()})

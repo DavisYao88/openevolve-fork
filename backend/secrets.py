@@ -49,6 +49,18 @@ def _provider_keys(secrets: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _provider_api_bases(llm: dict[str, Any]) -> dict[str, str]:
+    """读取 {供应商: api_base} 分桶，切换供应商时端点跟着走，不会串到上一家。"""
+    raw = llm.get("provider_api_bases")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(name): value.strip()
+        for name, value in raw.items()
+        if isinstance(value, str) and value.strip()
+    }
+
+
 def _current_api_key(provider: Any = None) -> str:
     """优先级：环境变量 OPENEVOLVE_API_KEY > 该供应商自己的 Key。
 
@@ -118,6 +130,13 @@ def _migrate_legacy_secrets() -> None:
                     value = str(first.get(source) or "").strip()
                     if value and not llm.get(target):
                         llm[target] = value
+        # 旧版单个 api_base -> 当前供应商的端点表（切换供应商时端点跟着走）
+        single_base = llm.pop("api_base", None)
+        if isinstance(single_base, str) and single_base.strip():
+            bases = _provider_api_bases(llm)
+            bases.setdefault(_normalize_provider(llm.get("provider")), single_base.strip())
+            llm["provider_api_bases"] = bases
+            changed = True
         if changed:
             try:
                 _save_gui_settings(settings)
@@ -177,6 +196,13 @@ def _public_settings() -> dict[str, Any]:
     llm.pop("api_key", None)
     llm.pop("models", None)
 
+    provider = _normalize_provider(llm.get("provider"))
+    bases = _provider_api_bases(llm)
+    # 各供应商的端点回给前端，切换时直接带出（不含任何密钥）
+    llm["provider_api_bases"] = bases
+    if bases.get(provider):
+        llm["api_base"] = bases[provider]
+
     env_base = (os.environ.get("OPENEVOLVE_API_BASE") or "").strip()
     env_model = (os.environ.get("OPENEVOLVE_PRIMARY_MODEL") or "").strip()
     if env_base:
@@ -184,7 +210,6 @@ def _public_settings() -> dict[str, Any]:
     if env_model:
         llm["primary_model"] = env_model
 
-    provider = _normalize_provider(llm.get("provider"))
     env_key = (os.environ.get("OPENEVOLVE_API_KEY") or "").strip()
     provider_keys = _provider_keys(_load_secrets())
     key = env_key or provider_keys.get(provider, "")
@@ -217,15 +242,40 @@ def _apply_gui_llm_settings(config: dict[str, Any]) -> None:
     llm.pop("secondary_model", None)
 
     settings = _load_gui_settings().get("llm") or {}
-    for key in ("provider", "api_base", "primary_model"):
-        value = settings.get(key)
-        if isinstance(value, str) and value.strip():
-            llm[key] = value.strip()
 
-    # 只取当前供应商自己的 Key，不同供应商互不影响
-    api_key = _current_api_key(llm.get("provider"))
+    # 供应商：设置页显式配置过才覆盖，否则沿用 global_config 里的值
+    raw_provider = settings.get("provider")
+    if isinstance(raw_provider, str) and raw_provider.strip():
+        provider = _normalize_provider(raw_provider)
+        llm["provider"] = provider
+    else:
+        provider = _normalize_provider(llm.get("provider"))
+
+    # 端点按供应商取，取不到就清掉，绝不沿用上一家的 api_base
+    base = _provider_api_bases(settings).get(provider) or settings.get("api_base")
+    if isinstance(base, str) and base.strip():
+        llm["api_base"] = base.strip()
+    else:
+        llm.pop("api_base", None)
+
+    model = settings.get("primary_model")
+    if isinstance(model, str) and model.strip():
+        llm["primary_model"] = model.strip()
+
+    # 环境变量优先级最高：设置页展示的就是它，这里必须同样生效
+    env_base = (os.environ.get("OPENEVOLVE_API_BASE") or "").strip()
+    env_model = (os.environ.get("OPENEVOLVE_PRIMARY_MODEL") or "").strip()
+    if env_base:
+        llm["api_base"] = env_base
+    if env_model:
+        llm["primary_model"] = env_model
+
+    # 只取当前供应商自己的 Key；GUI 接管供应商配置后，绝不沿用 global 里别家的 Key
+    api_key = _current_api_key(provider)
     if api_key:
         llm["api_key"] = api_key
+    elif isinstance(raw_provider, str) and raw_provider.strip():
+        llm.pop("api_key", None)
 
     for key in ("temperature", "max_tokens"):
         value = settings.get(key)

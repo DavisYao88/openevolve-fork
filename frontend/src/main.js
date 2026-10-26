@@ -3,7 +3,6 @@ import Antd from "ant-design-vue";
 import { createRouter, createWebHistory } from "vue-router";
 import App from "./App.vue";
 import EvolutionView from "./views/EvolutionView.vue";
-import ManualView from "./views/ManualView.vue";
 import RunsView from "./views/RunsView.vue";
 import RunDetailView from "./views/RunDetailView.vue";
 import ProgramView from "./views/ProgramView.vue";
@@ -15,7 +14,6 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: "/", component: EvolutionView },
-    { path: "/manual", component: ManualView },
     { path: "/launch", redirect: "/runs" },
     { path: "/runs", component: RunsView },
     { path: "/runs/:id", component: RunDetailView },

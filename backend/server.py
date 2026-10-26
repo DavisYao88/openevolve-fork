@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 
+from . import state
 from .app import create_app
 from .secrets import _migrate_legacy_secrets
 
@@ -19,5 +20,8 @@ logging.basicConfig(
 
 # 与 visualizer 的启动流程保持一致：把历史明文密钥收敛到独立 secrets 文件
 _migrate_legacy_secrets()
+
+# 重启后重新接管上一次遗留的运行中任务（能查进度、能取消）
+state.restore_registry()
 
 app = create_app()

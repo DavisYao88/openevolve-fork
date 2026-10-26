@@ -54,6 +54,8 @@ TEMPLATE_DIR = SOLVER_DIR / "templates"
 DEFAULT_TEMPLATE_ID = "famou-调参-v1"
 GLOBAL_CONFIG_PATH = GUI_RUNS_DIR / "global_config.yml"
 GUI_SETTINGS_PATH = GUI_RUNS_DIR / "gui_settings.json"
+# 运行中任务的注册表快照（pid + 目录）：服务重启后靠它对账，找回失控的子进程
+GUI_ACTIVE_RUNS_PATH = GUI_RUNS_DIR / "active_runs.json"
 # 密钥单独存放（600 权限、已在 .gitignore 里），不写进任何配置/提交文件
 GUI_SECRETS_PATH = GUI_RUNS_DIR / "llm_secrets.json"
 # A run whose log has not grown for this long is treated as interrupted rather

@@ -1,0 +1,47 @@
+name: D+2 出库货量参数调优（famou v3）
+description: 复用生产组合分流和7折滚动回测，只读评估v2.0.0 LightGBM参数并封存Test。
+defaults:
+  iterations: 50
+
+files:
+  initial_program: init.py
+  prompt: prompt.md
+  adapter: runner_adapter.py
+
+objective:
+  metrics:
+    - name: wmape
+      direction: minimize
+      transform: log
+      scale: 100
+    - name: wmape_std
+      direction: minimize
+      scale: 35
+    - name: worst_fold_wmape
+      direction: minimize
+      scale: 40
+    - name: bias_abs
+      direction: minimize
+      threshold: 0.05
+      scale: 100
+    - name: baseline_regret
+      direction: minimize
+      scale: 150
+
+validation:
+  mode: params_dict
+  variable: PARAMS
+  ranges:
+    n_estimators: {min: 150, max: 1200, type: int}
+    learning_rate: {min: 0.008, max: 0.12, type: float}
+    num_leaves: {min: 4, max: 63, type: int}
+    max_depth: {min: 2, max: 6, type: int}
+    min_child_samples: {min: 30, max: 300, type: int}
+    subsample: {min: 0.6, max: 1.0, type: float}
+    colsample_bytree: {min: 0.45, max: 1.0, type: float}
+    reg_alpha: {min: 0.0, max: 20.0, type: float}
+    reg_lambda: {min: 0.0, max: 20.0, type: float}
+    min_split_gain: {min: 0.0, max: 0.5, type: float}
+  enums:
+    objective: [regression, regression_l1]
+

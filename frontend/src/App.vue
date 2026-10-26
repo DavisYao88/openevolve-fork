@@ -47,7 +47,6 @@ onMounted(() => {
       </RouterLink>
       <nav class="main-nav" aria-label="主导航">
         <RouterLink to="/runs" :class="{ active: route.path.startsWith('/runs') }">任务列表</RouterLink>
-        <RouterLink to="/manual" :class="{ active: route.path === '/manual' }">人工反馈</RouterLink>
       </nav>
       <div class="header-actions">
         <RouterLink class="icon-button" :to="'/settings'" :class="{ active: route.path === '/settings' }" title="设置" aria-label="设置">

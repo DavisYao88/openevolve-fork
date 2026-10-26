@@ -11,6 +11,8 @@ import json
 import logging
 import os
 import re as _re
+import signal
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -21,16 +23,71 @@ from . import paths, state
 logger = logging.getLogger(__name__)
 
 
+TERMINATE_GRACE_SECONDS = 5.0
+
+
 def _reap_finished_runs() -> None:
-    """Drop finished tasks from the registry and record their exit code."""
-    for run_id in list(state.active_runs):
-        run = state.active_runs[run_id]
-        return_code = run["process"].poll()
+    """Drop finished tasks from the registry and record their exit code.
+
+    已被用户取消（status == "interrupted"）的任务保持原状态，不被退出码覆盖。
+    """
+    for run_id, run in state.snapshot():
+        process = run.get("process")
+        if process is None:
+            # 服务重启后接管的条目：没有进程句柄，只能用 pid 判断是否已结束
+            if state.pid_alive(run.get("pid")):
+                continue
+            state.forget_run(run_id)
+            continue
+        try:
+            return_code = process.poll()
+        except OSError:
+            return_code = None
         if return_code is None:
             continue
-        run["status"] = "completed" if return_code == 0 else "failed"
+        if run.get("status") == "running":
+            run["status"] = "completed" if return_code == 0 else "failed"
         run["return_code"] = return_code
-        del state.active_runs[run_id]
+        state.forget_run(run_id)
+
+
+def _signal_run(pid: int, sig: int) -> None:
+    """对任务进程组发信号（子进程用 start_new_session=True 启动）。"""
+    try:
+        os.killpg(os.getpgid(pid), sig)
+        return
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        os.kill(pid, sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def _terminate_run(pid: int, run_id: str, process=None) -> bool:
+    """先 SIGTERM，宽限期后仍存活则 SIGKILL。返回是否发出过终止信号。"""
+    if process is None and not state.pid_runs_task(pid, run_id):
+        return False
+    _signal_run(pid, signal.SIGTERM)
+    deadline = time.monotonic() + TERMINATE_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        if process is not None:
+            try:
+                if process.poll() is not None:
+                    return True
+            except OSError:
+                return True
+        elif not state.pid_alive(pid):
+            return True
+        time.sleep(0.2)
+    logger.warning("Run %s ignored SIGTERM after %.0fs, sending SIGKILL", run_id, TERMINATE_GRACE_SECONDS)
+    _signal_run(pid, signal.SIGKILL)
+    if process is not None:
+        try:
+            process.wait(timeout=3)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    return True
 
 
 def find_latest_checkpoint(base_folder):

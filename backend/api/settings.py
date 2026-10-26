@@ -10,6 +10,7 @@ from ..secrets import (
     _load_gui_settings,
     _load_secrets,
     _normalize_provider,
+    _provider_api_bases,
     _public_settings,
     _save_gui_settings,
     _save_secrets,
@@ -67,6 +68,12 @@ def gui_settings_api():
                 else:
                     secrets.pop("provider_keys", None)
             _save_secrets(secrets)
+        # 端点按供应商留存：切回来时自动带出，也不会串到上一家
+        incoming_base = incoming.get("api_base")
+        if isinstance(incoming_base, str) and incoming_base.strip():
+            bases = _provider_api_bases(llm)
+            bases[provider_name] = incoming_base.strip()
+            llm["provider_api_bases"] = bases
         for key, cast in (("temperature", float), ("max_tokens", int)):
             if key in incoming:
                 value = incoming.get(key)

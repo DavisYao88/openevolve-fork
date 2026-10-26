@@ -28,18 +28,22 @@ const saving = ref(false);
 const message = ref("");
 const error = ref("");
 
-// 各供应商各自的 Key（掩码），后端一次返回，切换供应商时直接查表
+// 各供应商各自的 Key（掩码）与端点，后端一次返回，切换供应商时直接查表
 const providerKeyMasks = ref({});
+const providerApiBases = ref({});
 const envKeyMasked = ref("");
 
 const providerLabel = computed(
   () => PROVIDERS.find((item) => item.value === provider.value)?.label || provider.value
 );
 
-// 已存过 Key 的供应商，用于提示「各自独立、互不覆盖」
-const savedProviders = computed(() =>
-  Object.keys(providerKeyMasks.value)
-    .map((value) => PROVIDERS.find((item) => item.value === value)?.label || value)
+// 已存过 Key 的供应商（带掩码），用于提示「各自独立、互不覆盖」
+const savedKeySummary = computed(() =>
+  Object.entries(providerKeyMasks.value)
+    .map(([value, masked]) => {
+      const label = PROVIDERS.find((item) => item.value === value)?.label || value;
+      return `${label} ${masked}`;
+    })
     .join("、")
 );
 
@@ -57,28 +61,16 @@ function refreshKeyState() {
 
 const keyHint = computed(() => {
   if (apiKeySource.value === "env") {
-    return `环境变量 / .env.local 里的 Key 对所有供应商生效：${envKeyMasked.value}`;
+    return `环境变量已生效：${envKeyMasked.value}（对所有供应商优先）`;
   }
   if (!hasApiKey.value) return `「${providerLabel.value}」尚未配置 API Key`;
-  return `「${providerLabel.value}」已保存：${apiKeyMasked.value}（来自本地 secrets 文件）`;
+  return `「${providerLabel.value}」已保存：${apiKeyMasked.value}`;
 });
 
 const placeholder = computed(() => {
   if (apiKeySource.value === "env") return `环境变量已生效：${envKeyMasked.value}（留空不修改）`;
   if (hasApiKey.value) return `已保存：${apiKeyMasked.value}（留空不修改）`;
   return "粘贴 API Key";
-});
-
-// 说明 Key 存在哪、怎么注入（每个供应商各一把，互不覆盖）
-const keyNote = computed(() => {
-  const tail = "任务配置里只写 ${OPENEVOLVE_API_KEY} 占位符，运行时由子进程环境变量注入。";
-  if (apiKeySource.value === "env") {
-    return `当前生效的是环境变量 / .env.local（已 gitignore），优先级最高，对所有供应商都生效；${tail}`;
-  }
-  if (hasApiKey.value) {
-    return `「${providerLabel.value}」的 Key 保存在本机 evolve_tasks/llm_secrets.json（600 权限、已 gitignore），接口只回传掩码；每个供应商各存一把，切换不会覆盖其他供应商；${tail}`;
-  }
-  return `还没有「${providerLabel.value}」的可用 Key：可以在本页保存，或在 .env.local 里设置 OPENEVOLVE_API_KEY。每个供应商的 Key 单独保存；${tail}`;
 });
 
 function applyTheme(value) {
@@ -93,7 +85,8 @@ function pickProvider() {
   refreshKeyState();
   apiKey.value = "";
   if (!preset) return;
-  if (preset.apiBase) apiBase.value = preset.apiBase;
+  // 该供应商存过端点就用存过的，避免沿用上一家的 api_base
+  apiBase.value = providerApiBases.value[provider.value] || preset.apiBase || "";
   if (preset.model && !modelName.value) modelName.value = preset.model;
 }
 
@@ -104,6 +97,7 @@ function applySettings(data) {
   apiBase.value = llm.api_base || "";
   apiKeySource.value = llm.api_key_source || "";
   providerKeyMasks.value = llm.provider_keys || {};
+  providerApiBases.value = llm.provider_api_bases || {};
   // 后端未返回 env 掩码时退回当前生效掩码（env 模式下二者等价）
   envKeyMasked.value =
     llm.env_api_key_masked || (llm.api_key_source === "env" ? llm.api_key_masked : "") || "";
@@ -167,7 +161,7 @@ onMounted(loadSettings);
       <div>
         <p class="eyebrow">Settings</p>
         <h1>设置</h1>
-        <p>外观与模型供应商。模型配置会写入下一次启动的演化任务（<code>llm</code> 段）。</p>
+        <p>外观与模型配置。模型参数与 API Key 会写入下一次启动的演化任务（<code>llm</code> 段）。</p>
       </div>
       <div class="heading-actions">
         <button class="button primary" :disabled="saving || loading" @click="save">{{ saving ? "保存中…" : "保存设置" }}</button>
@@ -192,24 +186,11 @@ onMounted(loadSettings);
             深色
           </button>
         </div>
-
-        <h2 class="section-title">模型参数</h2>
-        <div class="field-row">
-          <label class="field">
-            <span>Temperature</span>
-            <input v-model="temperature" class="text-input" inputmode="decimal" />
-          </label>
-          <label class="field">
-            <span>Max Tokens</span>
-            <input v-model="maxTokens" class="text-input" inputmode="numeric" />
-          </label>
-        </div>
-        <p class="field-hint">留空则沿用全局 config。</p>
       </section>
 
       <section class="card">
-        <h2>模型供应商</h2>
-        <p class="card-hint">单个模型，演化与校验都用它；API Key 按供应商分别保存。</p>
+        <h2>模型与密钥</h2>
+        <p class="card-hint">单个模型，演化与校验都用它。API Key 按供应商分别保存，切换互不覆盖。</p>
 
         <div class="field-grid">
           <label class="field">
@@ -238,11 +219,26 @@ onMounted(loadSettings);
           <span>API Key（{{ providerLabel }}）</span>
           <input v-model="apiKey" class="text-input mono" type="password" autocomplete="off" :placeholder="placeholder" />
         </label>
-        <p class="field-hint">{{ keyHint }}</p>
-        <p v-if="savedProviders" class="field-hint">已保存 Key 的供应商：{{ savedProviders }}（各自独立，切换不覆盖）。</p>
-        <p v-if="envFile" class="field-hint">检测到 <code>.env.local</code>：其中的 <code>OPENEVOLVE_API_KEY</code> 优先级高于本页保存的 Key，且对所有供应商都生效。</p>
 
-        <p class="field-hint">{{ keyNote }}</p>
+        <div class="key-status">
+          <p class="key-status-main">{{ keyHint }}</p>
+          <p v-if="savedKeySummary">本机已存 Key：{{ savedKeySummary }}（各自独立，切换不覆盖）</p>
+          <p v-if="envFile">检测到 <code>.env.local</code>，其中 <code>OPENEVOLVE_API_KEY</code> 优先于本页保存</p>
+          <p>任务配置只写 <code>${OPENEVOLVE_API_KEY}</code> 占位符，运行时由子进程注入</p>
+        </div>
+
+        <h3 class="subsection">模型参数</h3>
+        <div class="field-row">
+          <label class="field">
+            <span>Temperature</span>
+            <input v-model="temperature" class="text-input" inputmode="decimal" />
+          </label>
+          <label class="field">
+            <span>Max Tokens</span>
+            <input v-model="maxTokens" class="text-input" inputmode="numeric" />
+          </label>
+        </div>
+        <p class="field-hint">留空则沿用全局 config。</p>
       </section>
     </div>
   </section>
@@ -250,13 +246,12 @@ onMounted(loadSettings);
 
 <style scoped>
 .heading-actions { display:flex; gap:8px; }
-.settings-grid { display:grid; grid-template-columns:minmax(250px, 1fr) minmax(0, 1.9fr); gap:16px; align-items:start; }
+.settings-grid { display:grid; grid-template-columns:minmax(230px, 0.7fr) minmax(0, 2.3fr); gap:16px; align-items:start; }
 .settings-grid h2 { margin:0; font-size:14px; }
-.section-title { margin-top:20px !important; }
 .card-hint { margin:6px 0 14px; color:var(--muted); font-size:11px; }
 .theme-switch { display:flex; gap:10px; }
 .theme-option { display:flex; flex:1; align-items:center; justify-content:center; gap:8px; padding:12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:inherit; font-size:12px; cursor:pointer; }
-.theme-option.selected { border-color:var(--accent); background:#eef3ff; color:var(--accent); font-weight:700; }
+.theme-option.selected { border-color:var(--accent); background:var(--accent-soft); color:var(--accent); font-weight:700; }
 .theme-swatch { width:16px; height:16px; border-radius:50%; border:1px solid var(--line); }
 .theme-swatch.light { background:#fff; }
 .theme-swatch.dark { background:#1b2438; }
@@ -266,6 +261,11 @@ onMounted(loadSettings);
 .field-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 .field-hint { margin:6px 0 0; color:var(--muted); font-size:10px; line-height:1.6; }
 .field-hint code { color:#3a4658; }
+.key-status { display:grid; gap:3px; margin:2px 0 0; padding:9px 11px; border:1px solid var(--line); border-radius:8px; background:color-mix(in srgb, var(--line) 28%, var(--surface)); }
+.key-status p { margin:0; color:var(--muted); font-size:10.5px; line-height:1.65; }
+.key-status-main { color:inherit !important; font-size:11px !important; font-weight:600; }
+.key-status code { color:inherit; }
+.subsection { margin:20px 0 10px !important; padding-top:14px; border-top:1px solid var(--line); color:var(--muted); font-size:12px !important; font-weight:600; }
 @media (max-width: 900px) {
   .settings-grid { grid-template-columns:1fr; }
   .field-grid { grid-template-columns:1fr; }
