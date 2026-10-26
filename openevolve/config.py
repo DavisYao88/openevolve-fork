@@ -335,6 +335,9 @@ class DatabaseConfig:
     population_size: int = 1000
     archive_size: int = 100
     num_islands: int = 5
+    # Entry i is the program island i starts from; null or missing keeps the default.
+    # Island 0 always starts from the initial program passed on the command line.
+    island_initial_programs: List[Optional[str]] = field(default_factory=list)
 
     # Selection parameters
     elite_selection_ratio: float = 0.1
@@ -383,6 +386,19 @@ class DatabaseConfig:
     # falls back to the OPENAI_EMBEDDING_BASE_URL environment variable
     embedding_api_base: Optional[str] = None
     similarity_threshold: float = 0.99
+
+    def validate_island_initial_programs(self) -> None:
+        """Check island_initial_programs against num_islands and the island 0 rule"""
+        if len(self.island_initial_programs) > self.num_islands:
+            raise ValueError(
+                "database.island_initial_programs has more entries than database.num_islands"
+            )
+
+        if self.island_initial_programs and self.island_initial_programs[0] is not None:
+            raise ValueError(
+                "database.island_initial_programs[0] must be null; island 0 starts from the "
+                "initial program passed on the command line"
+            )
 
 
 @dataclass
@@ -486,6 +502,16 @@ class Config:
             if not template_path.is_absolute():
                 config.prompt.template_dir = str((config_path.parent / template_path).resolve())
 
+        # Resolve island_initial_programs relative to config file location
+        config.database.island_initial_programs = [
+            (
+                str((config_path.parent / seed_path).resolve())
+                if seed_path is not None and not Path(seed_path).is_absolute()
+                else seed_path
+            )
+            for seed_path in config.database.island_initial_programs
+        ]
+
         return config
 
     @classmethod
@@ -530,6 +556,8 @@ class Config:
             raise ValueError(
                 "prompt.island_system_messages has more entries than database.num_islands"
             )
+
+        config.database.validate_island_initial_programs()
 
         if config.prompt.programs_as_changes_description and not config.diff_based_evolution:
             raise ValueError(
