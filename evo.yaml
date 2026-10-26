@@ -1,0 +1,120 @@
+- generic [ref=f1e3]:
+  - banner [ref=f1e4]:
+    - link "O OpenEvolve 进化工作台" [ref=f1e5] [cursor=pointer]:
+      - /url: /runs
+      - generic [ref=f1e6]: O
+      - generic [ref=f1e7]:
+        - strong [ref=f1e8]: OpenEvolve
+        - generic [ref=f1e9]: 进化工作台
+    - navigation "主导航" [ref=f1e10]:
+      - link "任务列表" [ref=f1e11] [cursor=pointer]:
+        - /url: /runs
+      - link "人工反馈" [ref=f1e12] [cursor=pointer]:
+        - /url: /manual
+    - link "设置" [ref=f1e14] [cursor=pointer]:
+      - /url: /settings
+  - main [ref=f1e18]:
+    - generic [ref=f1e19]:
+      - generic [ref=f1e20]:
+        - generic [ref=f1e21]:
+          - paragraph [ref=f1e22]: Evolution Monitor
+          - heading "进化可视化" [level=1] [ref=f1e23]
+          - paragraph [ref=f1e24]: 任务 evolve_task_20261026154706
+        - generic [ref=f1e25]:
+          - button "进化树" [ref=f1e26] [cursor=pointer]
+          - button "轮次明细" [ref=f1e27] [cursor=pointer]
+          - button "性能趋势" [ref=f1e28] [cursor=pointer]
+          - button "程序列表" [ref=f1e29] [cursor=pointer]
+          - button "特征地图" [ref=f1e30] [cursor=pointer]
+      - generic [ref=f1e31]:
+        - generic [ref=f1e32]:
+          - text: 评分指标
+          - combobox "评分指标" [ref=f1e33]:
+            - option "combined_score" [selected]
+            - option "loss"
+        - generic [ref=f1e34]:
+          - text: 高亮规则
+          - combobox "高亮规则" [ref=f1e35]:
+            - option "不高亮"
+            - option "最高分" [selected]
+            - option "初始代"
+            - option "评测失败"
+            - option "指标缺失"
+            - option "精英档案"
+        - generic [ref=f1e36]:
+          - checkbox "按岛屿分组" [checked] [ref=f1e37]
+          - text: 按岛屿分组
+        - generic [ref=f1e38]:
+          - text: 检查点
+          - combobox "检查点" [ref=f1e39]:
+            - option "最新" [selected]
+            - option "checkpoint_5 · 6 程序"
+            - option "checkpoint_10 · 10 程序"
+        - generic [ref=f1e40]: 每 3 秒刷新
+      - generic [ref=f1e42]:
+        - generic [ref=f1e43]:
+          - generic [ref=f1e44]:
+            - paragraph [ref=f1e45]: Run Progress
+            - heading "evolve_task_20261026154706" [level=2] [ref=f1e46]
+          - generic [ref=f1e47]:
+            - generic [ref=f1e48]: 已完成
+            - link "任务详情与日志" [ref=f1e49] [cursor=pointer]:
+              - /url: /runs/evolve_task_20261026154706
+        - progressbar [ref=f1e50]
+        - paragraph [ref=f1e52]: 第 10 / 10 轮 · 成功 10 · 失败 0
+      - generic [ref=f1e54]:
+        - generic [ref=f1e55]:
+          - generic [ref=f1e56]:
+            - heading "程序演化关系" [level=2] [ref=f1e57]
+            - paragraph [ref=f1e58]: 方块内数字=岛屿编号，填充=分数（蓝→绿→黄由低到高），描边颜色=所属岛屿，金色=最优节点到根的进化路径 · 滚轮缩放，按住拖拽平移
+          - generic [ref=f1e59]:
+            - button "按演化关系" [ref=f1e60] [cursor=pointer]
+            - button "按轮次" [ref=f1e61] [cursor=pointer]
+            - generic [ref=f1e62]: 10 个程序 · 3 代
+            - generic "日志中最后一次刷新最优解的轮次" [ref=f1e63]: ★ 最优：第 1 轮 · e16cee25
+            - button "＋" [ref=f1e64] [cursor=pointer]
+            - button "－" [ref=f1e65] [cursor=pointer]
+            - button "适应" [ref=f1e66] [cursor=pointer]
+            - button "100%" [ref=f1e67] [cursor=pointer]
+        - img "程序演化树" [ref=f1e69]:
+          - generic [ref=f1e70]:
+            - 'generic "6da98a75-dc30-4247-a75c-dea4f6b7b303 · 岛屿 0 · 第 0 代 · combined_score: 235.376" [ref=f1e78] [cursor=pointer]':
+              - generic: "0"
+              - generic: 轮0 · 6da98a75
+              - generic: "235.376"
+            - 'generic "e16cee25-10fe-4372-bb3b-9a9d18aedba5 · 岛屿 0 · 第 1 代 · combined_score: 6590.522" [ref=f1e80] [cursor=pointer]':
+              - generic: "0"
+              - generic: 轮1 · e16cee25
+              - generic: "6590.522"
+            - 'generic "49aa4d83-861d-41bf-b551-890bf7332abb · 岛屿 0 · 第 2 代 · combined_score: 6590.522" [ref=f1e82] [cursor=pointer]':
+              - generic: "0"
+              - generic: 轮10 · 49aa4d83
+              - generic: "6590.522"
+            - 'generic "1aab6a7b-1010-4e93-8f86-807f713a63d6 · 岛屿 0 · 第 1 代 · combined_score: 6590.522" [ref=f1e84] [cursor=pointer]':
+              - generic: "0"
+              - generic: 轮4 · 1aab6a7b
+              - generic: "6590.522"
+            - 'generic "837a451d-4a6f-4410-8172-0060287234bd · 岛屿 0 · 第 1 代 · combined_score: 6590.522" [ref=f1e86] [cursor=pointer]':
+              - generic: "0"
+              - generic: 轮7 · 837a451d
+              - generic: "6590.522"
+            - 'generic "d24d7b78-3509-4d4f-9d10-45a7f785dce2 · 岛屿 1 · 第 1 代 · combined_score: 6590.522" [ref=f1e88] [cursor=pointer]':
+              - generic: "1"
+              - generic: 轮2 · d24d7b78
+              - generic: "6590.522"
+            - 'generic "92109f12-60b3-46cf-a02a-2084dcca50b9 · 岛屿 1 · 第 2 代 · combined_score: 4254.144" [ref=f1e90] [cursor=pointer]':
+              - generic: "1"
+              - generic: 轮8 · 92109f12
+              - generic: "4254.144"
+            - 'generic "ac989ec5-2c28-4d29-a94c-b6962f6a65b4 · 岛屿 2 · 第 2 代 · combined_score: 5302.256" [ref=f1e92] [cursor=pointer]':
+              - generic: "2"
+              - generic: 轮9 · ac989ec5
+              - generic: "5302.256"
+            - 'generic "172c9920-96b3-4c51-892e-ce6c4de2a0aa · 岛屿 2 · 第 2 代 · combined_score: 4254.144" [ref=f1e94] [cursor=pointer]':
+              - generic: "2"
+              - generic: 轮6 · 172c9920
+              - generic: "4254.144"
+            - 'generic "48afc871-fbd7-4b7f-bc2c-bad761452321 · 岛屿 2 · 第 1 代 · combined_score: 6590.522" [ref=f1e96] [cursor=pointer]':
+              - generic: "2"
+              - generic: 轮3 · 48afc871
+              - generic: "6590.522"
