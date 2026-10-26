@@ -612,6 +612,26 @@ function selectNode(id) {
 const codeDrawer = ref(null);
 const drawerLines = computed(() => String(codeDrawer.value?.code || "").split("\n"));
 
+// 复制抽屉里的完整代码：'' | 'done' | 'fail'，1.6s 后复原
+const drawerCopyState = ref("");
+let drawerCopyTimer;
+
+async function copyDrawerCode() {
+  const text = String(codeDrawer.value?.code || "");
+  if (!text) return;
+  let ok = true;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    ok = false;
+  }
+  drawerCopyState.value = ok ? "done" : "fail";
+  window.clearTimeout(drawerCopyTimer);
+  drawerCopyTimer = window.setTimeout(() => {
+    drawerCopyState.value = "";
+  }, 1600);
+}
+
 function isBestProgramId(id) {
   return !!bestProgramId.value && id === bestProgramId.value;
 }
@@ -699,6 +719,8 @@ function openCode(id, meta) {
 
 function closeCode() {
   codeDrawer.value = null;
+  drawerCopyState.value = "";
+  window.clearTimeout(drawerCopyTimer);
 }
 
 const listContainer = ref(null);
@@ -1173,7 +1195,16 @@ onUnmounted(() => {
             <span v-if="!codeDrawer.loading && !codeDrawer.error"> · {{ drawerLines.length }} 行</span>
           </p>
         </div>
-        <button class="button" @click="closeCode">✕</button>
+        <div class="drawer-head-actions">
+          <button
+            class="button drawer-copy"
+            :class="drawerCopyState"
+            :disabled="codeDrawer.loading || !!codeDrawer.error || !codeDrawer.code"
+            :title="codeDrawer.code ? '复制完整代码到剪贴板' : '暂无可复制的代码'"
+            @click="copyDrawerCode"
+          >{{ drawerCopyState === "done" ? "已复制" : (drawerCopyState === "fail" ? "复制失败" : "复制代码") }}</button>
+          <button class="button" @click="closeCode">✕</button>
+        </div>
       </header>
 
       <dl class="drawer-facts">
@@ -1338,6 +1369,10 @@ export default { components: { NodeDetail } };
 .node-tip { position:fixed; z-index:200; min-width:190px; max-width:320px; padding:9px 11px; border-radius:9px; background:#101828f2; box-shadow:0 8px 24px #10182840; color:#e8edf7; pointer-events:none; }
 .code-drawer { position:fixed; top:0; right:0; z-index:320; display:flex; flex-direction:column; gap:10px; width:min(660px, 64vw); height:100vh; padding:18px 20px; background:var(--surface); border-left:1px solid var(--line); box-shadow:-18px 0 46px #10182826; }
 .drawer-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.drawer-head-actions { display:flex; flex:none; align-items:center; gap:8px; }
+.drawer-copy { white-space:nowrap; }
+.drawer-copy.done { border-color:#178454; color:#178454; }
+.drawer-copy.fail { border-color:#c14242; color:#c14242; }
 .drawer-head h3 { margin:4px 0 0; font-size:14px; display:flex; align-items:center; gap:8px; }
 .drawer-meta { margin:5px 0 0; color:var(--muted); font-size:10px; }
 .drawer-hint { margin:0; color:var(--muted); font-size:11px; }
