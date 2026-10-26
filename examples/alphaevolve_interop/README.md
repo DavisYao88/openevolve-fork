@@ -102,19 +102,29 @@ output. The completed `EvolutionResult` is available as `experiment.result`.
 `list_programs` returns **only the best result**, using the SDK's
 `alphaEvolvePrograms` content/evaluation envelope. It is not an archive listing;
 there is no pagination. `order_by="<returned metric> asc|desc"` is accepted for
-entrypoint migration but has no effect on a one-item result. Unknown metrics or
-other query parameters raise errors. OE's internal `combined_score` is omitted
+entrypoint migration but has no effect on a one-item result. The generic `score`
+ordering names the client's explicit objective, not an average of metrics.
+Unknown metrics or other query parameters raise errors. OE's internal `combined_score` is omitted
 unless it was explicitly selected as the objective; numeric objective/feature
 scores, including negatives, are retained. An error metric adds a generic
-failure insight. `run_controller_loop` only checks successful completion and
-accepts no cloud worker or timeout options.
+failure insight. `run_controller_loop` only checks successful completion.
+Explicit positive `num_samplers` and `num_evaluators` integers are accepted with
+a warning that they are ignored: the synchronous OE run has already finished,
+and no workers are created or concurrency changed. Other cloud controller
+options, including idle timeouts, remain unsupported.
 
-This is **not yet** enough to execute the original three upstream entrypoints
-unchanged: complete archive access, remote client/controller methods and the
-full SDK model surface remain unsupported. Local connection settings are still
-required, and cloud-specific configuration/controller calls need adaptation.
-The runner below remains available for unchanged upstream evaluators.
-No managed Google Cloud run is implied by a local facade run.
+`client.get_alpha_evolve_experiment(experiment_name=...)` is an in-memory lookup
+of experiments created by that client. It returns a fresh `{"name": ..., "state": ...}`
+dictionary, including for a created-but-not-started diagnostic experiment.
+State reflects the local lifecycle; it is not a cloud resource/status schema.
+Unknown names and names from another client raise `ValueError`. No configuration,
+credentials, program data or requests are involved; the client retains its local
+experiments for the client's lifetime.
+
+The scoped runner below now executes the three reviewed original entrypoints
+with explicit configuration/factory swaps. Complete archive access, other
+remote client/controller methods and the full SDK model surface remain
+unsupported. No managed Google Cloud run is implied by a local facade run.
 
 ```bash
 python -m unittest discover -s tests -p 'test_alphaevolve_local_experiment.py' -v
@@ -201,9 +211,175 @@ MPLBACKEND=Agg python examples/alphaevolve_interop/run.py \
 python -m unittest discover -s tests -p 'test_alphaevolve_local_imports.py' -v
 ```
 
-This closes the local evaluator-type/import gap, not the complete SDK shim or
-the original-entrypoint acceptance criterion for #468. It neither enables cloud
-execution nor changes the facade's budget, concurrency or best-only query limits.
+These types close the local evaluator-type/import gap, not the complete SDK shim
+by themselves. They neither enable cloud execution nor change the facade's
+budget, concurrency or best-only query limits.
+
+## Run the original local-evaluation entrypoints
+
+`run_entrypoint.py` executes the upstream `src/run_evolution.py`'s original
+`main()` for **circle_packing**, **tsp** and **signal_processing** with explicit
+local connection/model settings. It stages byte-identical copies of `src/` and optional
+`instructions.md`, imports their relative helpers under temporary local aliases,
+and swaps imported client/experiment factories and configuration globals. It
+does not rewrite the source, replace the evaluator, or contact Google's SDK.
+
+From an installed OE checkout, with a reviewed upstream checkout as above:
+
+```bash
+python -m pip install numpy scipy 'matplotlib>=3.9.1,<3.11' nest-asyncio python-dotenv
+
+# Run the original TSP main, including its seed scoring and report generation.
+# No generation requests. The output directory must be new and outside the example.
+MPLBACKEND=Agg python examples/alphaevolve_interop/run_entrypoint.py \
+  ../alphaevolve-reference/examples/tsp \
+  --api-base http://localhost:8000/v1 --model my-local-model \
+  --output-dir ./tsp-local-seed
+
+# Explicitly opt in to one model-driven generation attempt; may incur charges.
+MPLBACKEND=Agg python examples/alphaevolve_interop/run_entrypoint.py \
+  ../alphaevolve-reference/examples/circle_packing \
+  --api-base http://localhost:8000/v1 --model my-local-model \
+  --evolve --iterations 1 --output-dir ./circle-local-run
+
+# Run the original signal-processing main without model or Google Cloud requests.
+python examples/alphaevolve_interop/run_entrypoint.py \
+  ../alphaevolve-reference/examples/signal_processing \
+  --api-base http://localhost:8000/v1 --model my-local-model \
+  --output-dir ./signal-local-seed
+```
+
+The endpoint/model are required even for the default seed-only run; their live
+availability is not checked until generation is requested. `--evolve` defaults
+to one generation attempt. Explicit positive `--iterations` requires `--evolve`.
+These are OE generation attempts, not hard evaluation/request/time/cost caps;
+seed evaluation, retries and the original reporting code's own evaluations are
+additional. An upstream entrypoint can score its seed before OE scores it again.
+Remote/cloud-evaluation examples such as adaptive sorting and LLM fine tuning
+remain unsupported.
+
+Only a named `--api-key-env VARIABLE_NAME` selects a key, which must be non-empty.
+Without it, an explicit local placeholder is used, including for provider-client
+construction in seed-only mode. The runner does **not** fall back to
+`OPENAI_API_KEY` or an example `.env` for credentials. Authenticated endpoints
+need an explicitly selected key before using `--evolve`. Google connection
+arguments in the upstream main are accepted by the existing facade and warn
+that they are ignored.
+
+The runner disables `dotenv.load_dotenv` during entrypoint import and temporarily
+supplies the selected model, equal positive source budgets, synchronous
+evaluation and concurrency-one configuration. Import-time environment changes
+are restored afterwards. It then sets the corresponding entrypoint globals
+explicitly, including zero local generation iterations for a seed-only run. This
+does not equate cloud generation concurrency with OE worker concurrency: the
+facade keeps its existing single-worker behavior and unsupported-field warnings.
+Missing expected configuration names cause a layout-drift error rather than a
+guessed adaptation.
+
+Signal processing's reviewed entrypoint has no model configuration. For that
+entrypoint only, a local experiment subclass supplies a single
+`generation_settings.models` entry from the required `--model`, overriding any
+upstream model list without mutating the original dictionary. The generic facade
+still requires explicit models; it does not guess a default. The original main
+first creates/queries a diagnostic experiment, then creates a separate experiment
+to run. The runner requires precisely this `CREATED`, `COMPLETED` sequence;
+an early return, caught diagnostic error or incomplete run is not success.
+
+While signal processing's main runs, `SAVE_PROGRAM_DIR` is set to the staged
+`programs/` directory and restored afterwards, including on failure. This keeps
+the evaluator's optional archive writes away from an inherited destination.
+The original saver can reuse filenames; these files are not a complete archive
+of evaluations. No other arbitrary environment or filesystem side effects are
+isolated.
+
+`.env*` files and bytecode caches are excluded from the staged `src/` copy;
+symlinks in the selected source tree or instructions are rejected. Original
+source files remain untouched, and reports operate on the staged copy. A new
+`--output-dir` retains copied sources, `oe-output/`, and upstream report artifacts,
+including partial output after failure. Existing directories/files/symlinks are
+never reused; the parent directory must already exist. Without `--output-dir`,
+the temporary run and reports are removed on success or failure.
+
+The final stdout is an OE metrics/best-score JSON summary; Python-level upstream
+prints are redirected to stderr. Upstream report/plot routines still execute;
+`MPLBACKEND=Agg` avoids interactive plot windows. Reports receive **only the
+facade's best result**, not the complete archive, so their history charts and
+reported program-list counts are not full-run evaluation statistics.
+The reviewed circle-packing plot helper uses `matplotlib.cm.get_cmap`, which
+[Matplotlib removed in 3.11](https://matplotlib.org/stable/api/prev_api_changes/api_changes_3.11.0.html#matplotlib-cm-get-cmap).
+The optional dependency range above retains that upstream plotting API; it is
+not a restriction on OE's base dependencies. This runner does not patch plotting
+libraries or rewrite upstream visualization code.
+
+Use a fresh, single-threaded main process outside an active asyncio loop.
+Temporary package and SDK aliases are removed before `main()` so evaluator
+callables serialize by value to workers. Already-loaded cloud SDK namespaces
+are refused. Trusted source code, including import-time code and plotting
+helpers, executes with normal process privileges; copying and alias cleanup
+provide no sandbox or general rollback of external side effects. Dynamic
+relative imports after initial loading are outside this reviewed subset.
+
+This walkthrough covers three original-entrypoint paths toward #468. It is not a
+full SDK replacement, managed-service validation or completion of the issue.
+
+```bash
+python -m unittest discover -s tests -p 'test_alphaevolve_entrypoint.py' -v
+```
+
+### Pinned upstream-example CI
+
+The separate **AlphaEvolve upstream examples** workflow runs on relevant pull
+requests and can be dispatched manually after it is on the default branch. It
+uses a standard Ubuntu runner with Python 3.12, read-only repository permissions,
+no Secrets, no Google SDK and no paid provider. It has a 15-minute job limit,
+cancels superseded runs on the same PR/ref, and uploads no artifacts or caches.
+Checkout and dependency installation need Internet access; the example subprocesses
+then run with network/SDK-import tripwires and a small allowlist of environment
+variables, containing only deliberate dummy credential traps.
+
+[`tests/alphaevolve_upstream/revision.txt`](../../tests/alphaevolve_upstream/revision.txt)
+is the single upstream commit pin. Changing Google's `main` does not silently
+change these tests. The suite requires clean example trees at that revision,
+with the checkout inside OE's parent workspace (a sibling or nested directory).
+Paths are canonicalized and escapes from that workspace are rejected. The
+scientific dependencies are test-only and pinned separately; the Matplotlib pin
+retains the reviewed upstream plotting API. OE's base dependencies are unchanged.
+
+There are six original-entrypoint cases: circle packing, TSP and signal
+processing, each seed-only and with one fixed comment-only proposal. They use
+the existing public runner, unmodified upstream evaluators and real OE workers.
+The evolution cases check OE's actual trace for an evaluated child containing
+the proposal marker, instead of treating a provider call or successful process
+exit alone as proof. The cases also check expected finite seed metrics, exact
+original/staged source hashes, alias cleanup and report artifacts. TSP must
+produce all five PNG reports and its saved program; signal processing must
+retain its evaluator archive under the run directory.
+
+Python audit hooks record blocked socket/DNS attempts immediately, including in
+workers that exit without running `atexit`. Unscoped `alpha_evolve` and Google
+imports are blocked and recorded too; the explicit local aliases still work.
+Two negative tests check that even caught network/import exceptions remain
+observable and fail offline validation. These are tripwires for the trusted
+examples, not a security sandbox. Fixed proposals establish compatibility, not
+real-model optimization quality or a managed AlphaEvolve service run.
+
+To reproduce the eight opt-in checks locally from an OE checkout:
+
+```bash
+git clone https://github.com/Google-Cloud-AI/alphaevolve-on-googlecloud.git ../alphaevolve-reference
+git -C ../alphaevolve-reference checkout "$(cat tests/alphaevolve_upstream/revision.txt)"
+python -m pip install -e . -r tests/alphaevolve_upstream/requirements.txt
+ALPHAEVOLVE_UPSTREAM_DIR=../alphaevolve-reference \
+  python tests/alphaevolve_upstream/test_examples.py -v
+```
+
+Run this command in a Python 3.12 environment matching the workflow. No model
+server or Google credentials are needed. A missing path, wrong revision, dirty
+upstream checkout or offline violation makes explicit execution fail. Temporary
+run directories are cleaned up; failures include captured subprocess diagnostics.
+This suite is separate from default unit discovery and the existing
+`tests/integration` real-model job; neither implicitly downloads the upstream
+repository or requires these optional scientific packages.
 
 ## Evaluate an upstream seed locally
 
@@ -532,6 +708,58 @@ Run the offline bundle tests with:
 python -m unittest discover -s tests -p 'test_alphaevolve_bundle.py' -v
 python -m unittest discover -s tests -p 'test_alphaevolve_launch.py' -v
 ```
+
+### Verify a complete local round trip
+
+The dedicated interop workflow also exercises two existing OpenEvolve examples
+through this complete path, without Google's SDK or a model service:
+
+```text
+OE Python seed + evaluator + YAML
+  -> export_to_alphaevolve
+  -> relocate bundle and remove the original input directory
+  -> config_from_alphaevolve(experiment.json)
+  -> generated candidate evaluator -> adapt_evaluator
+  -> real OpenEvolve seed evaluation + one evaluated proposal
+```
+
+From an installed source checkout, reproduce just these checks with:
+
+```bash
+python tests/alphaevolve_upstream/test_roundtrip.py -v
+```
+
+Unlike the original-entrypoint tests, this command needs no AlphaEvolve source
+checkout. It uses the unchanged `function_minimization` and `circle_packing`
+sources from this repository. The helper runs from an unrelated temporary
+working directory, checks source hashes and configuration mappings, and removes
+temporary import registrations before transporting evaluators to OE workers.
+Both the seed and a fixed comment-only proposal are evaluated on each side.
+The tests compare all numeric seed/child metrics except elapsed evaluation time,
+check positive finite fitness, and require worker evaluation records and actual
+evolution traces. A provider call or successful process exit alone is insufficient.
+The existing test-only startup tripwires block and record network and cloud SDK
+attempts in the helper, workers and evaluator subprocesses. These are safeguards
+for trusted examples, not a security sandbox.
+
+This is execution equivalence of the **supported subset under controlled inputs**,
+not a lossless search/configuration round trip. The test bounds the budget to one,
+fixes NumPy's random stream per evaluation, and explicitly aligns one island,
+single-stage single-worker evaluation and diff mode. The circle example needs
+an explicit model-name mapping; model weights and the mapped names are checked
+before replacing generation with the fixed offline provider. The imported prompt
+has the documented `Problem description:` prefix. Export warnings for omitted
+settings are checked; original artifacts and timing are not expected to survive.
+There is no claim of real-model improvement or of preservation of the examples'
+original multi-island/cascade behavior.
+
+For #468, the three original local entrypoints and this OE-to-bundle-to-OE path
+now have automated offline coverage. **An authenticated managed AlphaEvolve run
+remains a separate acceptance check.** Neither these tests nor GitHub Actions
+exercise Google's service, verify project access/live model availability, or
+establish cloud cost limits. A maintainer with service access can review a bundle,
+run its local `check.py` and preflight, then explicitly test `--run` as documented
+above before deciding whether to close #468 or track remaining scope separately.
 
 ## Import a local Python experiment configuration
 
