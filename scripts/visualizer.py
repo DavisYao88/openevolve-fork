@@ -1044,6 +1044,8 @@ def run_api():
         return jsonify({"error": "全局配置 evaluator.evaluator_args 必须是映射。"}), 500
     config["max_iterations"] = iterations
     config["prompt"] = {"template_dir": ".", "system_message": "prompt"}
+    # 设置页里配置的模型供应商覆盖全局配置，本次任务立即生效
+    _apply_gui_llm_settings(config)
 
     if not run_lock.acquire(blocking=False):
         return jsonify({"error": "正在启动另一个任务，请稍后再试。"}), 409
@@ -1402,6 +1404,99 @@ def run_program_api(run_id, program_id):
         })
 
     return jsonify({"error": f"在所有检查点里都没有找到程序：{program_id}"}), 404
+
+
+GUI_SETTINGS_PATH = GUI_RUNS_DIR / "gui_settings.json"
+
+
+def _load_gui_settings() -> dict[str, Any]:
+    if not GUI_SETTINGS_PATH.is_file():
+        return {}
+    try:
+        data = json.loads(GUI_SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_gui_settings(data: dict[str, Any]) -> None:
+    GUI_RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    GUI_SETTINGS_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _public_settings() -> dict[str, Any]:
+    """Settings payload for the UI. The API key is never sent back in full."""
+    data = _load_gui_settings()
+    llm = dict(data.get("llm") or {})
+    key = str(llm.pop("api_key", "") or "")
+    llm["has_api_key"] = bool(key)
+    llm["api_key_masked"] = (f"{key[:4]}…{key[-4:]}" if len(key) > 8 else "*" * len(key))
+    return {"theme": data.get("theme", "light"), "llm": llm}
+
+
+@app.route("/api/settings", methods=["GET", "POST"])
+def gui_settings_api():
+    """Read or update GUI preferences: theme and the LLM provider used by new runs."""
+    if not _is_local_request():
+        abort(403)
+    if request.method == "GET":
+        return jsonify(_public_settings())
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "请求内容必须是 JSON 对象。"}), 400
+
+    current = _load_gui_settings()
+    llm = dict(current.get("llm") or {})
+    incoming = payload.get("llm")
+    if isinstance(incoming, dict):
+        for key in ("provider", "api_base", "primary_model"):
+            if isinstance(incoming.get(key), str):
+                llm[key] = incoming[key].strip()
+        for key, cast in (("temperature", float), ("max_tokens", int)):
+            if key in incoming:
+                value = incoming.get(key)
+                if value in ("", None):
+                    llm.pop(key, None)
+                    continue
+                try:
+                    llm[key] = cast(value)
+                except (TypeError, ValueError):
+                    return jsonify({"error": f"{key} 不是合法数值。"}), 400
+        api_key = incoming.get("api_key")
+        if isinstance(api_key, str) and api_key.strip():
+            llm["api_key"] = api_key.strip()
+        if incoming.get("clear_api_key"):
+            llm["api_key"] = ""
+
+    theme = payload.get("theme")
+    if theme in ("light", "dark"):
+        current["theme"] = theme
+    current["llm"] = llm
+    try:
+        _save_gui_settings(current)
+    except OSError as error:
+        logger.exception("Could not save GUI settings")
+        return jsonify({"error": f"保存失败：{error}"}), 500
+    return jsonify(_public_settings())
+
+
+def _apply_gui_llm_settings(config: dict[str, Any]) -> None:
+    """Let the settings page override the LLM section of the global config."""
+    llm_settings = _load_gui_settings().get("llm")
+    if not isinstance(llm_settings, dict):
+        return
+    llm = config.get("llm")
+    if not isinstance(llm, dict):
+        llm = {}
+        config["llm"] = llm
+    for key in ("api_base", "api_key", "primary_model", "temperature", "max_tokens"):
+        value = llm_settings.get(key)
+        if value in ("", None):
+            continue
+        llm[key] = value
 
 
 @app.route("/api/runs/<run_id>/log")

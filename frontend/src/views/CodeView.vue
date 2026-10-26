@@ -65,6 +65,12 @@ function renderLine(line) {
   return escapeHtml(line);
 }
 
+const BEST_PROGRAM_PATH = "output/best/best_program.py";
+
+function isBestPath(path) {
+  return path === BEST_PROGRAM_PATH;
+}
+
 function sizeLabel(size) {
   if (!Number.isFinite(size)) return "";
   if (size < 1024) return `${size} B`;
@@ -177,6 +183,7 @@ watch(runId, loadTree);
                 <FolderOutlined v-else-if="node.type === 'dir'" class="node-icon dir" />
                 <FileTextOutlined v-else class="node-icon file" />
                 <span class="tree-name mono">{{ node.name }}</span>
+                <span v-if="isBestPath(node.key)" class="tree-best">★</span>
                 <span v-if="node.type === 'file'" class="tree-size">{{ sizeLabel(node.size) }}</span>
               </span>
             </template>
@@ -191,6 +198,7 @@ watch(runId, loadTree);
             <p v-if="file" class="file-meta mono">
               {{ file.path }} · {{ sizeLabel(file.size) }}
               <span v-if="file.truncated" class="truncated">（超过 300 KB，已截断显示）</span>
+              <span v-if="isBestPath(file.path)" class="best-badge">★ 最优输出程序</span>
               <span v-if="isJson" class="formatted">已格式化 JSON</span>
             </p>
           </div>
@@ -230,6 +238,8 @@ watch(runId, loadTree);
 .file-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }
 .file-head h2 { margin:0; font-size:14px; overflow-wrap:anywhere; }
 .file-meta { margin:4px 0 0; color:var(--muted); font-size:10px; overflow-wrap:anywhere; }
+.tree-best { flex:none; color:#c98a12; font-size:11px; }
+.best-badge { margin-left:6px; padding:1px 7px; border-radius:100px; background:#e8a63b; color:#fff; font-size:9px; font-weight:700; }
 .truncated { color:#946407; }
 .formatted { margin-left:6px; padding:1px 6px; border-radius:100px; background:#eef3ff; color:var(--accent); }
 .code-view { display:flex; min-height:480px; max-height:70vh; overflow:auto; border-radius:10px; background:#172033; }

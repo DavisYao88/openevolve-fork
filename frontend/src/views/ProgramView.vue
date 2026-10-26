@@ -22,12 +22,70 @@ const nodes = computed(() => data.value.nodes || []);
 // 早期轮次的程序可能已经不在最新检查点里，需要跨检查点兜底查找
 const fallback = ref({ node: null, parent: null });
 const fallbackCheckpoint = ref("");
+// output/best/best_program_info.json 里记录的是全局最优程序，用它判断"这份代码是不是最好的"
+const bestProgramId = ref("");
+
+async function loadBestInfo() {
+  bestProgramId.value = "";
+  if (!runId.value) return;
+  try {
+    const raw = await api.runOutputFile(runId.value, "best_program_info.json");
+    // 接口返回 { content: "<json 文本>" }，也可能直接是对象，两种都兼容
+    const parsed = typeof raw === "string" || typeof raw?.content === "string"
+      ? JSON.parse(typeof raw === "string" ? raw : raw.content)
+      : raw;
+    bestProgramId.value = parsed?.id || parsed?.program_id || "";
+  } catch {
+    /* 没有最优产物时忽略 */
+  }
+}
+
+const isBestProgram = computed(() => !!bestProgramId.value && bestProgramId.value === selectedId.value);
 
 const node = computed(() => nodes.value.find((item) => item.id === selectedId.value) || fallback.value.node || null);
+
+// 父程序经常已经不在当前检查点里（被淘汰），需要跨检查点再找一次
+const parentFallback = ref(null);
+
+// 按检查点缓存节点表，避免为了找父程序反复拉整份数据
+const nodeCache = new Map();
+
+async function findProgramEverywhere(id) {
+  if (!id) return null;
+  try {
+    const response = await api.runProgram(runId.value, id);
+    if (response?.node) return response.node;
+  } catch {
+    /* 后端接口未就绪时走下面的遍历 */
+  }
+  for (const item of [...checkpointList.value].reverse()) {
+    if (!item?.name) continue;
+    if (!nodeCache.has(item.name)) {
+      try {
+        const detail = await api.evolution(runId.value, item.name);
+        nodeCache.set(item.name, new Map((detail.nodes || []).map((node) => [node.id, node])));
+      } catch {
+        continue;
+      }
+    }
+    const hit = nodeCache.get(item.name).get(id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+async function loadParentFallback() {
+  parentFallback.value = null;
+  const parentId = node.value?.parent_id;
+  if (!parentId || !runId.value) return;
+  if (nodes.value.some((item) => item.id === parentId)) return;
+  parentFallback.value = await findProgramEverywhere(parentId);
+}
+
 const parentNode = computed(() => {
   const parentId = node.value?.parent_id;
   if (!parentId) return null;
-  return nodes.value.find((item) => item.id === parentId) || fallback.value.parent || null;
+  return nodes.value.find((item) => item.id === parentId) || parentFallback.value || fallback.value.parent || null;
 });
 const archive = computed(() => data.value.archive || []);
 
@@ -209,9 +267,11 @@ async function loadAll() {
   }
 }
 
-onMounted(loadAll);
+onMounted(() => { loadAll(); loadBestInfo(); });
 watch(() => route.query.checkpoint || "", loadAll);
+watch(runId, () => { nodeCache.clear(); loadBestInfo(); });
 watch([selectedId, nodes], loadFallback);
+watch([() => node.value?.parent_id, nodes], loadParentFallback);
 
 const summary = computed(() => {
   if (!node.value) return [];
@@ -288,6 +348,8 @@ const summary = computed(() => {
           <div class="summary-row">
             <span v-for="[key, value] in summary" :key="key"><small>{{ key }}</small><b>{{ value }}</b></span>
             <span v-if="fallbackCheckpoint" class="source-tag"><small>来源检查点</small><b class="mono">{{ fallbackCheckpoint }}</b></span>
+            <span v-if="isBestProgram" class="best-tag">★ 全局最优程序</span>
+            <span v-else-if="bestProgramId" class="muted-tag">当前非最优（最优 {{ bestProgramId.slice(0, 8) }}）</span>
           </div>
           <button class="button" @click="copyCode">复制代码</button>
         </header>
@@ -305,12 +367,19 @@ const summary = computed(() => {
 
         <div v-if="fileTab === 'diff'" class="diff-view">
           <div class="diff-head">
-            <span>父程序 <code>{{ parentNode?.id ? String(parentNode.id).slice(0, 8) : "—" }}</code></span>
+            <span title="父程序 = 生成这个程序时作为基础的上一代程序（parent_id），不一定来自上一轮">父程序 <code>{{ parentNode?.id ? String(parentNode.id).slice(0, 8) : "—" }}</code></span>
             <span>本程序 <code>{{ String(node?.id || "").slice(0, 8) }}</code></span>
             <label class="diff-only"><input v-model="diffOnly" type="checkbox">只看差异</label>
-            <span class="diff-stat">+{{ diffStats.add }} / -{{ diffStats.del }}</span>
+            <span v-if="parentNode" class="diff-stat">+{{ diffStats.add }} / -{{ diffStats.del }}</span>
           </div>
-          <p v-if="!parentNode" class="empty-hint">该程序没有父程序（属于初始代），无可对比内容。</p>
+          <p class="diff-note">
+            父程序是该程序被变异/交叉时依据的上一代程序（<code>parent_id</code>），可能是很多轮之前产生的，不一定来自上一轮。
+          </p>
+          <p v-if="parentFallback" class="diff-note">父程序不在当前检查点，已从更早的检查点读取（可能是旧版本）。</p>
+          <p v-if="!node?.parent_id" class="empty-hint">这是初始代程序，没有 <code>parent_id</code>，所以没有可对比的父程序。</p>
+          <p v-else-if="!parentNode" class="empty-hint">
+            父程序 <code>{{ String(node.parent_id).slice(0, 8) }}</code> 已被淘汰、所有检查点里都找不到，无法对比。
+          </p>
           <div v-else class="diff-body">
             <div v-for="(row, index) in visibleDiffRows" :key="index" class="diff-row">
               <div class="diff-side" :class="row.left ? row.left.type : 'empty'">
@@ -372,6 +441,8 @@ const summary = computed(() => {
 .code-view { display:flex; min-height:460px; max-height:64vh; overflow:auto; border-radius:10px; background:#172033; }
 .source-tag { border-color:#e8c98b !important; background:#fffaf0; }
 .source-tag b { color:#946407; }
+.best-tag { padding:2px 9px; border-radius:100px; background:#e8a63b; color:#fff; font-size:10px; font-weight:700; }
+.muted-tag { padding:2px 9px; border-radius:100px; background:#f2f4f8; color:var(--muted); font-size:10px; }
 .line-numbers { flex:0 0 46px; padding:12px 8px; border-right:1px solid #26324a; color:#5a6b8a; font:11px/1.7 "IBM Plex Mono",monospace; text-align:right; user-select:none; }
 .line-numbers span { display:block; }
 .code-body { flex:1; margin:0; padding:12px 14px; color:#d7e0f1; font:11px/1.7 "IBM Plex Mono",monospace; white-space:pre; }
@@ -383,6 +454,8 @@ const summary = computed(() => {
 .diff-view { border-radius:10px; overflow:hidden; border:1px solid #26324a; }
 .diff-head { display:flex; align-items:center; gap:16px; padding:8px 12px; background:#1b2438; color:#9fb0cc; font-size:11px; }
 .diff-head code { color:#d7e0f1; font-family:"IBM Plex Mono",monospace; }
+.diff-note { margin:8px 12px 4px; color:var(--muted); font-size:10px; line-height:1.6; }
+.diff-note code { color:#3a4658; }
 .diff-only { display:flex; align-items:center; gap:5px; margin-left:auto; color:#9fb0cc; font-size:11px; cursor:pointer; }
 .diff-only input { margin:0; }
 .diff-stat { margin-left:14px; color:#8fd6a0; font-weight:700; }

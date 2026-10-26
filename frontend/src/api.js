@@ -42,6 +42,16 @@ export const api = {
   runOutputFile(runId, name) {
     return request(`/api/runs/${encodeURIComponent(runId)}/output/${encodeURIComponent(name)}`);
   },
+  settings() {
+    return request("/api/settings");
+  },
+  saveSettings(payload) {
+    return request("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
   runProgram(runId, programId) {
     return request(`/api/runs/${encodeURIComponent(runId)}/program/${encodeURIComponent(programId)}`);
   },

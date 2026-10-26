@@ -8,6 +8,7 @@ import RunsView from "./views/RunsView.vue";
 import RunDetailView from "./views/RunDetailView.vue";
 import ProgramView from "./views/ProgramView.vue";
 import CodeView from "./views/CodeView.vue";
+import SettingsView from "./views/SettingsView.vue";
 import "./style.css";
 
 const router = createRouter({
@@ -20,6 +21,7 @@ const router = createRouter({
     { path: "/runs/:id", component: RunDetailView },
     { path: "/program/:id", component: ProgramView },
     { path: "/code", component: CodeView },
+    { path: "/settings", component: SettingsView },
   ],
 });
 

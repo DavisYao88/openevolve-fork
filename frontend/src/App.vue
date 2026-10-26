@@ -11,8 +11,14 @@ function applyTheme(enabled) {
   localStorage.setItem("openevolve.theme", enabled ? "dark" : "light");
 }
 
+// 设置页里切换主题后，通知顶部同步（页面不会刷新，只改 data-theme）
+function syncTheme() {
+  darkMode.value = document.documentElement.dataset.theme === "dark";
+}
+
 onMounted(() => {
   applyTheme(localStorage.getItem("openevolve.theme") === "dark");
+  window.addEventListener("openevolve-theme", syncTheme);
 });
 </script>
 
@@ -30,12 +36,14 @@ onMounted(() => {
         <RouterLink to="/runs" :class="{ active: route.path.startsWith('/runs') }">任务列表</RouterLink>
         <RouterLink to="/manual" :class="{ active: route.path === '/manual' }">人工反馈</RouterLink>
       </nav>
-      <button class="theme-button" type="button" :aria-pressed="darkMode" @click="applyTheme(!darkMode)">
-        {{ darkMode ? "☾ 深色" : "☀ 浅色" }}
-      </button>
-      <a class="backend-status" href="http://127.0.0.1:8080" target="_blank" rel="noreferrer">
-        <i></i> Flask API
-      </a>
+      <div class="header-actions">
+        <RouterLink class="icon-button" :to="'/settings'" :class="{ active: route.path === '/settings' }" title="设置" aria-label="设置">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3.2"></circle>
+            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.11a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.11A1.7 1.7 0 0 0 4.67 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.67h.08A1.7 1.7 0 0 0 10.11 3.1V3a2 2 0 1 1 4 0v.11a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.08a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.11a1.7 1.7 0 0 0-1.49.86Z"></path>
+          </svg>
+        </RouterLink>
+      </div>
     </header>
     <main class="app-content">
       <RouterView />

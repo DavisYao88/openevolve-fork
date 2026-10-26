@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { api } from "../api";
+import { highlightLine } from "../highlight";
 
 const route = useRoute();
 const router = useRouter();
@@ -154,8 +155,8 @@ const islands = computed(() => progress.value?.islands || []);
 const logTail = computed(() => progress.value?.log_tail || []);
 
 // 进化树：按父子关系分层、向右展开（自绘连线，不用组件）
-const TREE_COLUMN = 210;
-const TREE_ROW = 58;
+const TREE_COLUMN = 132;
+const TREE_ROW = 42;
 
 const treeLayout = computed(() => {
   const nodeList = nodes.value;
@@ -217,15 +218,29 @@ const treeLayout = computed(() => {
   return {
     positions,
     edges: edgeList.filter((edge) => positions.has(edge.source) && positions.has(edge.target)),
-    width: Math.max(chartWidth, Math.max(...values.map((item) => item.x)) + 240),
-    height: Math.max(420, Math.max(...values.map((item) => item.y)) + 70),
+    width: Math.max(chartWidth, Math.max(...values.map((item) => item.x)) + 130),
+    height: Math.max(380, Math.max(...values.map((item) => item.y)) + 52),
   };
 });
 
+// 正交折线：父 → 水平 → 垂直 → 子，比长贝塞尔短得多，也更像工程树图
 function edgePath(source, target) {
   if (!source || !target) return "";
-  const midX = (source.x + target.x) / 2;
-  return `M ${source.x} ${source.y} C ${midX} ${source.y}, ${midX} ${target.y}, ${target.x} ${target.y}`;
+  const x1 = source.x + 12;
+  const x2 = target.x - 12;
+  const dy = target.y - source.y;
+  if (Math.abs(dy) < 2) return `M ${x1} ${source.y} H ${x2}`;
+  const dir = dy > 0 ? 1 : -1;
+  const radius = Math.min(8, Math.abs(dy) / 2, Math.max(4, (x2 - x1) / 2));
+  const midX = x1 + Math.max(radius + 2, (x2 - x1) / 2);
+  return [
+    `M ${x1} ${source.y}`,
+    `H ${midX - radius}`,
+    `Q ${midX} ${source.y} ${midX} ${source.y + dir * radius}`,
+    `V ${target.y - dir * radius}`,
+    `Q ${midX} ${target.y} ${midX + radius} ${target.y}`,
+    `H ${x2}`,
+  ].join(" ");
 }
 
 function nodePosition(id) {
@@ -330,14 +345,46 @@ function tipForIteration(item) {
 
 // ── 轮次树：每一轮一个节点，横轴=轮次序号，从左到右完整展开 ──
 const treeMode = ref("evolution");
-const ITERATION_COLUMN = 132;
-const ITERATION_ROW = 54;
+const ITERATION_COLUMN = 104;
+const ITERATION_ROW = 32;
 
 function iterationScore(item) {
   const match = /combined_score=(-?[\d.]+)/.exec(item?.metrics_text || "");
   return match ? Number(match[1]) : null;
 }
 
+// 最优轮次来自日志里的 "🌟 New best solution found at iteration N: programId"
+const bestEvents = computed(() => progress.value?.best_events || []);
+const bestIterationNumber = computed(() => (
+  bestEvents.value.length ? Math.max(...bestEvents.value.map((event) => Number(event.iteration) || 0)) : null
+));
+const bestProgramId = computed(() => bestEvents.value.at(-1)?.program_id || "");
+
+function isBestIteration(item) {
+  return Number(item.iteration) === bestIterationNumber.value && item.program_id === bestProgramId.value;
+}
+
+function iterationStroke(item) {
+  if (isBestIteration(item)) return "#e8a63b";
+  return item?.status === "completed" ? "#c3ccdb" : "#c14242";
+}
+
+function iterationScoreText(item) {
+  const score = iterationScore(item);
+  if (Number.isFinite(score)) return score.toFixed(2);
+  return item?.status === "completed" ? "—" : "✕";
+}
+
+const iterationElitePath = computed(() => {
+  const path = new Set();
+  const byProgram = new Map(iterations.value.filter((item) => item?.program_id).map((item) => [item.program_id, item]));
+  let current = iterations.value.find(isBestIteration)?.program_id;
+  while (current && !path.has(current)) {
+    path.add(current);
+    current = byProgram.get(current)?.parent_id;
+  }
+  return path;
+});
 const iterationScoreRange = computed(() => {
   const values = iterations.value.map(iterationScore).filter((value) => Number.isFinite(value));
   return values.length ? { min: Math.min(...values), max: Math.max(...values) } : { min: 0, max: 1 };
@@ -368,12 +415,12 @@ const iterationTree = computed(() => {
     }
   }
 
-  const minIteration = Math.min(...list.map((item) => Number(item.iteration) || 0));
   const positions = new Map();
   const seen = new Set();
   let cursor = 0;
 
-  const place = (programId) => {
+  // x 按代际深度排列（不是按轮次序号）：父子永远只差一列，连线不会被拉长
+  const place = (programId, depth) => {
     if (seen.has(programId)) return positions.get(programId);
     seen.add(programId);
     const item = byProgram.get(programId);
@@ -381,14 +428,14 @@ const iterationTree = computed(() => {
       .sort((a, b) => (Number(byProgram.get(a)?.iteration) || 0) - (Number(byProgram.get(b)?.iteration) || 0));
     let y;
     if (children.length) {
-      const ys = children.map((child) => place(child)?.y).filter((value) => value != null);
+      const ys = children.map((child) => place(child, depth + 1)?.y).filter((value) => value != null);
       y = ys.length ? ys.reduce((sum, value) => sum + value, 0) / ys.length : cursor * ITERATION_ROW + 46;
       if (!ys.length) cursor += 1;
     } else {
       y = cursor * ITERATION_ROW + 46;
       cursor += 1;
     }
-    const position = { x: 96 + ((Number(item.iteration) || 0) - minIteration) * ITERATION_COLUMN, y, item };
+    const position = { x: 96 + depth * ITERATION_COLUMN, y, item, depth };
     positions.set(programId, position);
     return position;
   };
@@ -396,14 +443,10 @@ const iterationTree = computed(() => {
   const roots = list
     .filter((item) => !hasParent.has(item.program_id))
     .sort((a, b) => (Number(a.iteration) || 0) - (Number(b.iteration) || 0));
-  for (const root of roots) place(root.program_id);
+  for (const root of roots) place(root.program_id, 0);
   for (const item of list) {
     if (positions.has(item.program_id)) continue;
-    positions.set(item.program_id, {
-      x: 96 + ((Number(item.iteration) || 0) - minIteration) * ITERATION_COLUMN,
-      y: cursor * ITERATION_ROW + 46,
-      item,
-    });
+    positions.set(item.program_id, { x: 96, y: cursor * ITERATION_ROW + 46, item, depth: 0 });
     cursor += 1;
   }
 
@@ -419,8 +462,8 @@ const iterationTree = computed(() => {
   return {
     rows,
     edges,
-    width: Math.max(chartWidth, Math.max(...rows.map((row) => row.x)) + 260),
-    height: Math.max(420, Math.max(...rows.map((row) => row.y)) + 70),
+    width: Math.max(chartWidth, Math.max(...rows.map((row) => row.x)) + 130),
+    height: Math.max(340, Math.max(...rows.map((row) => row.y)) + 46),
   };
 });
 
@@ -565,6 +608,63 @@ function selectNode(id) {
   selectedId.value = id;
 }
 
+// ── 点击节点弹出代码抽屉：先查当前检查点，再跨检查点兜底 ──
+const codeDrawer = ref(null);
+const drawerLines = computed(() => String(codeDrawer.value?.code || "").split("\n"));
+
+function isBestProgramId(id) {
+  return !!bestProgramId.value && id === bestProgramId.value;
+}
+
+async function loadProgramCode(id, meta = {}) {
+  codeDrawer.value = { id, ...meta, code: "", error: "", loading: true };
+  const local = nodes.value.find((item) => item.id === id);
+  if (local?.code) {
+    codeDrawer.value = { ...codeDrawer.value, code: local.code, checkpoint: selectedCheckpoint.value || "最新", loading: false };
+    return;
+  }
+  try {
+    const response = await api.runProgram(runId.value, id);
+    if (response?.node) {
+      codeDrawer.value = {
+        ...codeDrawer.value,
+        code: response.node.code || "",
+        checkpoint: response.checkpoint || "",
+        loading: false,
+      };
+      return;
+    }
+  } catch {
+    /* 接口没就绪或没找到，走下面的兜底 */
+  }
+  for (const item of [...checkpoints.value].reverse()) {
+    if (!item?.name) continue;
+    try {
+      const detail = await api.evolution(runId.value, item.name);
+      const hit = (detail.nodes || []).find((node) => node.id === id);
+      if (hit) {
+        codeDrawer.value = { ...codeDrawer.value, code: hit.code || "", checkpoint: item.name, loading: false };
+        return;
+      }
+    } catch {
+      /* 跳过读不出来的检查点 */
+    }
+  }
+  codeDrawer.value = {
+    ...codeDrawer.value,
+    loading: false,
+    error: "这个程序只存在于更早的检查点里，当前读不到它的代码。可点下方「打开完整程序页」尝试。",
+  };
+}
+
+function openCode(id, meta) {
+  if (id) loadProgramCode(id, meta);
+}
+
+function closeCode() {
+  codeDrawer.value = null;
+}
+
 const listContainer = ref(null);
 
 async function scrollToIndex(index) {
@@ -661,15 +761,23 @@ function saveMetric() {
   localStorage.setItem("openevolve.metric", metric.value);
 }
 
+function onKeydown(event) {
+  if (event.key === "Escape" && codeDrawer.value) {
+    codeDrawer.value = null;
+  }
+}
+
 onMounted(() => {
   loadData();
   loadProgress();
   refreshTimer = window.setInterval(loadData, 3000);
   progressTimer = window.setInterval(loadProgress, 3000);
+  window.addEventListener("keydown", onKeydown);
 });
 onUnmounted(() => {
   window.clearInterval(refreshTimer);
   window.clearInterval(progressTimer);
+  window.removeEventListener("keydown", onKeydown);
 });
 </script>
 
@@ -753,13 +861,16 @@ onUnmounted(() => {
         <div class="chart-heading">
           <div>
             <h2>{{ treeMode === "iterations" ? "轮次演化树" : "程序演化关系" }}</h2>
-            <p v-if="treeMode === 'iterations'">每一轮一个节点，横轴=轮次序号，从左到右完整展开；红色描边=该轮失败 · 滚轮缩放，按住拖拽平移</p>
-            <p v-else>方块填充=分数（蓝→绿→黄由低到高），描边=岛屿，金色=最优节点到根的进化路径 · 滚轮缩放，按住拖拽平移</p>
+            <p v-if="treeMode === 'iterations'">每一轮一个节点，横轴=代际层级（父子相邻一列，连线不被拉长），方块内是轮次号、右侧是分数；红色=该轮失败，★金色=最优轮次及其进化路径 · 滚轮缩放，按住拖拽平移</p>
+            <p v-else>方块内数字=岛屿编号，填充=分数（蓝→绿→黄由低到高），描边颜色=所属岛屿，金色=最优节点到根的进化路径 · 滚轮缩放，按住拖拽平移</p>
           </div>
           <div class="zoom-controls">
             <button class="button zoom-button" :class="{ selected: treeMode === 'evolution' }" @click="treeMode = 'evolution'; resetView()">按演化关系</button>
             <button class="button zoom-button" :class="{ selected: treeMode === 'iterations' }" @click="treeMode = 'iterations'; resetView()">按轮次</button>
             <span class="count-pill">{{ treeMode === "iterations" ? `${iterationTree.rows.length} 轮` : `${nodes.length} 个程序 · ${maxGeneration + 1} 代` }}</span>
+            <span v-if="bestIterationNumber" class="best-pill" title="日志中最后一次刷新最优解的轮次">
+              ★ 最优：第 {{ bestIterationNumber }} 轮 · {{ String(bestProgramId).slice(0, 8) }}
+            </span>
             <button class="button zoom-button" @click="zoom = Math.min(6, zoom * 1.2)">＋</button>
             <button class="button zoom-button" @click="zoom = Math.max(0.3, zoom / 1.2)">－</button>
             <button class="button zoom-button" title="缩放到完整显示整棵树" @click="fitView">适应</button>
@@ -774,35 +885,34 @@ onUnmounted(() => {
                   v-for="edge in iterationTree.edges"
                   :key="edge.id"
                   :d="edgePath(edge.source, edge.target)"
-                  class="tree-edge"
-                  :class="{ failed: edge.target.item.status !== 'completed' }"
+                  class="tree-edge compact"
+                  :class="{ failed: edge.target.item.status !== 'completed', elite: iterationElitePath.has(edge.target.item.program_id) }"
                 />
                 <g
                   v-for="row in iterationTree.rows"
                   :key="row.item.program_id"
                   class="tree-node"
-                  @click="row.item.program_id && selectNode(row.item.program_id)"
+                  @click="openCode(row.item.program_id, { iteration: row.item.iteration, score: iterationScore(row.item) })"
                   @dblclick="openProgramHere(row.item.program_id)"
                   @mouseenter="showTip($event, tipForIteration(row.item))"
                   @mousemove="moveTip"
                   @mouseleave="hideTip"
                 >
-                  <title>第 {{ row.item.iteration }} 轮 · {{ row.item.program_id }} · {{ row.item.status === "completed" ? "成功" : "失败" }} · 分数 {{ iterationScore(row.item) ?? "—" }}</title>
+                  <title>第 {{ row.item.iteration }} 轮 · {{ row.item.program_id }} · {{ row.item.status === "completed" ? "成功" : "失败" }} · 分数 {{ iterationScore(row.item) ?? "—" }}{{ isBestIteration(row.item) ? " · 最优轮次" : "" }}</title>
+                  <circle v-if="isBestIteration(row.item)" :cx="row.x" :cy="row.y" r="19" class="best-halo" />
                   <rect
-                    :x="row.x - 14"
-                    :y="row.y - 14"
-                    width="28"
-                    height="28"
-                    rx="9"
+                    :x="row.x - 12"
+                    :y="row.y - 12"
+                    width="24"
+                    height="24"
+                    rx="7"
                     :fill="fillForIteration(row.item)"
-                    :stroke="row.item.status === 'completed' ? '#c3ccdb' : '#c14242'"
-                    :stroke-width="row.item.status === 'completed' ? 1.5 : 2.5"
+                    :stroke="iterationStroke(row.item)"
+                    :stroke-width="isBestIteration(row.item) ? 2.4 : 1.4"
                   />
-                  <text :x="row.x" :y="row.y + 4" class="node-badge" text-anchor="middle">{{ row.item.iteration }}</text>
-                  <text :x="row.x + 21" :y="row.y - 2" class="node-title">{{ String(row.item.program_id).slice(0, 8) }}</text>
-                  <text :x="row.x + 21" :y="row.y + 11" class="node-score" :class="{ failed: row.item.status !== 'completed' }">
-                    {{ iterationScore(row.item) === null ? (row.item.status === "completed" ? "无指标" : "失败") : iterationScore(row.item).toFixed(2) }}
-                  </text>
+                  <text v-if="isBestIteration(row.item)" :x="row.x" :y="row.y - 18" class="best-star" text-anchor="middle">★</text>
+                  <text :x="row.x" :y="row.y + 3.6" class="node-badge" text-anchor="middle">{{ row.item.iteration }}</text>
+                  <text :x="row.x + 16" :y="row.y + 3.5" class="node-score compact" :class="{ failed: row.item.status !== 'completed', best: isBestIteration(row.item) }">{{ iterationScoreText(row.item) }}</text>
                 </g>
               </template>
               <template v-else>
@@ -818,7 +928,7 @@ onUnmounted(() => {
                 :key="node.id"
                 class="tree-node"
                 :class="{ chosen: selectedId === node.id, highlighted: isHighlighted(node) }"
-                @click="selectNode(node.id)"
+                @click="selectNode(node.id); openCode(node.id)"
                 @dblclick="openProgramHere(node.id)"
                 @mouseenter="showTip($event, tipForNode(node))"
                 @mousemove="moveTip"
@@ -877,8 +987,11 @@ onUnmounted(() => {
             <tr><th>轮次</th><th>状态</th><th>岛屿</th><th>程序</th><th>父程序</th><th>耗时</th><th>指标</th></tr>
           </thead>
           <tbody>
-            <tr v-for="item in iterations" :key="item.iteration">
-              <td>{{ item.iteration }}</td>
+            <tr v-for="item in iterations" :key="item.iteration" :class="{ 'best-row': isBestIteration(item) }">
+              <td>
+                {{ item.iteration }}
+                <span v-if="isBestIteration(item)" class="best-badge" title="最优轮次">★ 最优</span>
+              </td>
               <td>
                 <span class="iteration-state" :class="item.status">{{ item.status === "completed" ? "成功" : "失败" }}</span>
               </td>
@@ -1009,6 +1122,38 @@ onUnmounted(() => {
         <small>{{ label }}</small><b>{{ value }}</b>
       </div>
     </div>
+
+    <div v-if="codeDrawer" class="code-drawer">
+      <header class="drawer-head">
+        <div>
+          <p class="eyebrow">Code Preview</p>
+          <h3>
+            <span v-if="codeDrawer.iteration">第 {{ codeDrawer.iteration }} 轮 · </span>{{ String(codeDrawer.id).slice(0, 8) }}
+            <span v-if="isBestProgramId(codeDrawer.id)" class="best-badge">★ 最优</span>
+          </h3>
+          <p class="drawer-meta mono">
+            {{ codeDrawer.checkpoint || "—" }}
+            <span v-if="codeDrawer.score != null">· 分数 {{ Number(codeDrawer.score).toFixed(3) }}</span>
+            <span v-if="!codeDrawer.loading && !codeDrawer.error"> · {{ drawerLines.length }} 行</span>
+          </p>
+        </div>
+        <button class="button" @click="closeCode">✕</button>
+      </header>
+
+      <p v-if="codeDrawer.loading" class="drawer-hint">正在读取代码…</p>
+      <p v-else-if="codeDrawer.error" class="message error">{{ codeDrawer.error }}</p>
+      <div v-else class="code-view drawer-code">
+        <div class="line-numbers">
+          <span v-for="(_, index) in drawerLines" :key="index">{{ index + 1 }}</span>
+        </div>
+        <pre class="code-body"><code><span v-for="(line, index) in drawerLines" :key="index" class="code-line" v-html="highlightLine(line)"></span></code></pre>
+      </div>
+
+      <footer class="drawer-foot">
+        <RouterLink class="button primary" :to="programLink(codeDrawer.id)">打开完整程序页</RouterLink>
+        <button class="button" @click="closeCode">关闭</button>
+      </footer>
+    </div>
   </section>
 </template>
 
@@ -1123,13 +1268,37 @@ export default { components: { NodeDetail } };
 .count-pill { padding:6px 10px; border-radius:100px; background:#f3f5fa; color:#65728a; font-size:11px; white-space:nowrap; }
 .svg-scroll { overflow:auto; min-height:620px; max-height:86vh; border-top:1px solid #f0f2f6; }
 .tree-chart { display:block; width:100%; min-width:760px; }
-.tree-edge { fill:none; stroke:#c9d1df; stroke-width:1.5; }
-.tree-edge.chosen { stroke:#315fce; stroke-width:2.5; }
-.tree-edge.elite { stroke:#e8a63b; stroke-width:3.2; }
+.tree-edge { fill:none; stroke:#c9d1df; stroke-width:1.5; stroke-linejoin:round; stroke-linecap:round; }
+.tree-edge.chosen { stroke:#315fce; stroke-width:2.2; }
+.tree-edge.elite { stroke:#e8a63b; stroke-width:2.6; }
 .tree-edge.failed { stroke:#e3b3b3; stroke-dasharray:4 4; }
+.tree-edge.compact { stroke-width:1.5; }
+.best-halo { fill:#e8a63b; opacity:.16; }
+.best-star { fill:#c98a12; font:700 13px/1 system-ui; }
+.node-score.best { fill:#946407; font-weight:700; }
+.best-pill { flex:none; padding:3px 9px; border:1px solid #e8c98b; border-radius:100px; background:#fffaf0; color:#946407; font-size:10px; font-weight:600; white-space:nowrap; }
+.iteration-table tr.best-row { background:#fffaf0; }
+.iteration-table tr.best-row td { box-shadow:inset 0 -1px 0 #f3e2bd; }
+.best-badge { margin-left:6px; padding:1px 6px; border-radius:100px; background:#e8a63b; color:#fff; font-size:9px; font-weight:700; white-space:nowrap; }
 .node-score.failed { fill:#c14242; }
 .zoom-controls .button.selected { border-color:var(--accent); background:#eef3ff; color:var(--accent); }
 .node-tip { position:fixed; z-index:200; min-width:190px; max-width:320px; padding:9px 11px; border-radius:9px; background:#101828f2; box-shadow:0 8px 24px #10182840; color:#e8edf7; pointer-events:none; }
+.code-drawer { position:fixed; top:0; right:0; z-index:320; display:flex; flex-direction:column; gap:10px; width:min(660px, 64vw); height:100vh; padding:18px 20px; background:var(--surface); border-left:1px solid var(--line); box-shadow:-18px 0 46px #10182826; }
+.drawer-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.drawer-head h3 { margin:4px 0 0; font-size:14px; display:flex; align-items:center; gap:8px; }
+.drawer-meta { margin:5px 0 0; color:var(--muted); font-size:10px; }
+.drawer-hint { margin:0; color:var(--muted); font-size:11px; }
+.drawer-code { flex:1; min-height:0; max-height:none; }
+.drawer-foot { display:flex; gap:8px; }
+.code-view { display:flex; overflow:auto; border-radius:10px; background:#172033; }
+.line-numbers { flex:0 0 46px; padding:12px 8px; border-right:1px solid #26324a; color:#5a6b8a; font:11px/1.7 "IBM Plex Mono",monospace; text-align:right; user-select:none; }
+.line-numbers span { display:block; }
+.code-body { flex:1; margin:0; padding:12px 14px; color:#d7e0f1; font:11px/1.7 "IBM Plex Mono",monospace; white-space:pre; }
+.code-line { display:block; }
+.tok-comment { color:#7f8ea8; font-style:italic; }
+.tok-string { color:#8fd6a0; }
+.tok-keyword { color:#7fa9ff; font-weight:700; }
+.tok-number { color:#e8b46b; }
 .tip-row { display:flex; align-items:baseline; justify-content:space-between; gap:12px; font-size:10px; line-height:1.7; }
 .tip-row small { color:#9fb0cc; }
 .tip-row b { font-weight:600; overflow-wrap:anywhere; }
@@ -1143,6 +1312,7 @@ export default { components: { NodeDetail } };
 .node-badge { fill:#fff; font-size:10px; font-weight:700; pointer-events:none; }
 .node-title { fill:#3a4658; font-size:10px; font-weight:600; pointer-events:none; }
 .node-score { fill:#178454; font-size:10px; font-weight:700; font-family:"IBM Plex Mono",monospace; pointer-events:none; }
+.node-score.compact { fill:#54627a; font-size:8.5px; }
 .table-scroll { max-height:420px; overflow:auto; margin-top:12px; }
 .iteration-table { width:100%; border-collapse:collapse; font-size:11px; }
 .iteration-table th { position:sticky; top:0; padding:7px 8px; border-bottom:1px solid var(--line); background:#f8f9fc; color:#78849a; font-size:10px; text-align:left; }
@@ -1189,8 +1359,9 @@ export default { components: { NodeDetail } };
 .trend-point circle { stroke:#fff; stroke-width:2; }
 .trend-point.highlighted circle, .trend-point.chosen circle { stroke:#e5a02c; stroke-width:3; }
 .selected-caption { padding:0 22px 14px; color:var(--muted); font-size:12px; }
-.zoom-controls { display:flex; align-items:center; gap:8px; }
-.zoom-button { min-height:30px; padding:4px 9px; font-size:11px; }
+.zoom-controls { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:6px; }
+.zoom-button { flex:none; min-height:30px; padding:4px 9px; font-size:11px; white-space:nowrap; }
+.count-pill, .best-pill { flex:none; white-space:nowrap; }
 .tree-chart { cursor:grab; }
 .tree-chart:active { cursor:grabbing; }
 .checkpoint-control .select-input { width:auto; min-width:180px; min-height:34px; padding:6px 10px; font-size:12px; }
