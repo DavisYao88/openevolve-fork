@@ -77,11 +77,12 @@ async function submit() {
       evaluator: form.value.evaluator,
       objective: form.value.objective_yaml,
       validation: form.value.validation_yaml,
+      // 不续跑就不传该字段（传空串会被后端当成非法值）
       resume_from: resumeRun.value
         ? resumeCheckpoint.value
           ? `${resumeRun.value}/${resumeCheckpoint.value}`
           : resumeRun.value
-        : "",
+        : null,
       iterations: Number(form.value.iterations),
     });
     emit("started", response.run);

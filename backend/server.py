@@ -10,7 +10,7 @@ import logging
 import os
 
 from .app import create_app
-from .core import viz
+from .secrets import _migrate_legacy_secrets
 
 logging.basicConfig(
     level=os.environ.get("OPENEVOLVE_LOG_LEVEL", "INFO"),
@@ -18,6 +18,6 @@ logging.basicConfig(
 )
 
 # 与 visualizer 的启动流程保持一致：把历史明文密钥收敛到独立 secrets 文件
-viz._migrate_legacy_secrets()
+_migrate_legacy_secrets()
 
 app = create_app()

@@ -2,7 +2,8 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { api } from "../api";
-import { highlightLine } from "../highlight";
+import NodeDetail from "../components/NodeDetail.vue";
+import CodePreview from "../components/CodePreview.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -633,26 +634,6 @@ function selectNode(id) {
 const codeDrawer = ref(null);
 const drawerLines = computed(() => String(codeDrawer.value?.code || "").split("\n"));
 
-// 复制抽屉里的完整代码：'' | 'done' | 'fail'，1.6s 后复原
-const drawerCopyState = ref("");
-let drawerCopyTimer;
-
-async function copyDrawerCode() {
-  const text = String(codeDrawer.value?.code || "");
-  if (!text) return;
-  let ok = true;
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    ok = false;
-  }
-  drawerCopyState.value = ok ? "done" : "fail";
-  window.clearTimeout(drawerCopyTimer);
-  drawerCopyTimer = window.setTimeout(() => {
-    drawerCopyState.value = "";
-  }, 1600);
-}
-
 function isBestProgramId(id) {
   return !!bestProgramId.value && id === bestProgramId.value;
 }
@@ -740,8 +721,6 @@ function openCode(id, meta) {
 
 function closeCode() {
   codeDrawer.value = null;
-  drawerCopyState.value = "";
-  window.clearTimeout(drawerCopyTimer);
 }
 
 const listContainer = ref(null);
@@ -1014,8 +993,8 @@ onUnmounted(() => {
                 :key="node.id"
                 class="tree-node"
                 :class="{ chosen: selectedId === node.id, highlighted: isHighlighted(node) }"
-                @click="selectNode(node.id); openCode(node.id)"
-                @dblclick="openProgramHere(node.id)"
+                @click="selectNode(node.id)"
+                @dblclick="openCode(node.id)"
                 @mouseenter="showTip($event, tipForNode(node))"
                 @mousemove="moveTip"
                 @mouseleave="hideTip"
@@ -1043,7 +1022,7 @@ onUnmounted(() => {
         </div>
       </section>
       <aside v-if="selected" class="card detail-card">
-        <NodeDetail :node="selected" :nodes="nodes" :archive="data.archive || []" :metric="activeMetric" @close="selectedId = ''" @open="openProgram" />
+        <NodeDetail :node="selected" :nodes="nodes" :archive="data.archive || []" :metric="activeMetric" @close="selectedId = ''" @open="openProgram" @code="openCode($event.id)" />
       </aside>
     </div>
 
@@ -1202,10 +1181,11 @@ onUnmounted(() => {
               <span class="metric-scale"><em>{{ metricScale(name).min }}</em><em>{{ metricScale(name).max }}</em></span>
             </div>
           </div>
+          <button class="button open-window" title="在预览抽屉里查看这份代码" @click.stop="openCode(node.id)">查看代码</button>
           <button class="button open-window" title="在新窗口打开完整程序页" @click.stop="openProgram(node)">在新窗口打开</button>
         </article>
       </div>
-      <NodeDetail v-if="selected" :node="selected" :nodes="nodes" :archive="data.archive || []" :metric="activeMetric" @close="selectedId = ''" @open="openProgram" />
+      <NodeDetail v-if="selected" :node="selected" :nodes="nodes" :archive="data.archive || []" :metric="activeMetric" @close="selectedId = ''" @open="openProgram" @code="openCode($event.id)" />
     </section>
 
     <div v-if="hoverTip" class="node-tip" :style="{ left: `${hoverTip.x + 16}px`, top: `${hoverTip.y + 16}px` }">
@@ -1251,21 +1231,14 @@ onUnmounted(() => {
 
       <p v-if="codeDrawer.loading" class="drawer-hint">正在读取代码…</p>
       <p v-else-if="codeDrawer.error" class="message error">{{ codeDrawer.error }}</p>
-      <div v-else class="drawer-code-wrap">
-        <button
-          class="button code-copy-float"
-          :class="drawerCopyState"
-          :disabled="!codeDrawer.code"
-          :title="codeDrawer.code ? '复制完整代码到剪贴板' : '暂无可复制的代码'"
-          @click="copyDrawerCode"
-        >{{ drawerCopyState === "done" ? "已复制" : (drawerCopyState === "fail" ? "复制失败" : "复制代码") }}</button>
-        <div class="code-view drawer-code">
-          <div class="line-numbers">
-            <span v-for="(_, index) in drawerLines" :key="index">{{ index + 1 }}</span>
-          </div>
-          <pre class="code-body"><code><span v-for="(line, index) in drawerLines" :key="index" class="code-line" v-html="highlightLine(line)"></span></code></pre>
-        </div>
-      </div>
+      <CodePreview
+        v-else
+        class="drawer-code"
+        :content="codeDrawer.code || ''"
+        :filename="drawerCodePath"
+        language="python"
+        max-height="none"
+      />
 
       <footer class="drawer-foot">
         <RouterLink class="button primary" :to="programLink(codeDrawer.id)">打开完整程序页</RouterLink>
@@ -1276,62 +1249,6 @@ onUnmounted(() => {
   </section>
 </template>
 
-<script>
-const NodeDetail = {
-  props: { node: Object, nodes: Array, archive: Array, metric: String },
-  emits: ["close", "open"],
-  data() { return { active: "概览" }; },
-  computed: {
-    parent() { return this.nodes.find((item) => item.id === this.node.parent_id); },
-    children() { return this.nodes.filter((item) => item.parent_id === this.node.id); },
-    cloneNodes() {
-      const base = String(this.node.id).split("-copy")[0];
-      return this.nodes.filter((item) => item.id !== this.node.id && String(item.id).split("-copy")[0] === base);
-    },
-    tabs() {
-      return ["概览", ...(this.node.code ? ["代码"] : []), ...(this.node.prompts && Object.keys(this.node.prompts).length ? ["提示词"] : []), ...(this.children.length ? ["子程序"] : []), ...(this.cloneNodes.length ? ["克隆"] : []), ...(this.parent?.code && this.node.code ? ["差异"] : [])];
-    },
-    promptText() { return JSON.stringify(this.node.prompts || this.node.artifacts_json || {}, null, 2); },
-    diffLines() {
-      const parent = (this.parent?.code || "").split("\n");
-      const current = (this.node.code || "").split("\n");
-      const max = Math.max(parent.length, current.length);
-      return Array.from({ length: max }, (_, index) => {
-        if (parent[index] === current[index]) return { type: "same", text: current[index] || "" };
-        return { type: parent[index] === undefined ? "added" : current[index] === undefined ? "removed" : "changed", text: current[index] ?? `− ${parent[index]}` };
-      });
-    },
-  },
-  template: `
-    <div class="node-detail">
-      <div class="detail-head"><div><p class="eyebrow">Program Details</p><h2>程序详情</h2></div><button class="icon-button" aria-label="关闭详情" @click="$emit('close')">×</button></div>
-      <div class="node-stats">
-        <div><small>程序 ID</small><strong class="mono">{{ node.id }}</strong></div>
-        <div><small>代数 / 岛屿</small><strong>{{ node.generation ?? "—" }} / {{ node.island ?? "—" }}</strong></div>
-        <div><small>{{ metric }}</small><strong>{{ typeof node.metrics?.[metric] === "number" && Number.isFinite(node.metrics[metric]) ? node.metrics[metric].toFixed(4) : "—" }}</strong></div>
-        <div><small>父程序</small><strong class="mono">{{ node.parent_id || "无" }}</strong></div>
-      </div>
-      <div class="metric-tags"><span v-for="(value, name) in node.metrics || {}" :key="name"><small>{{ name }}</small><b>{{ value }}</b></span></div>
-      <div class="detail-tabs"><button v-for="tab in tabs" :key="tab" :class="{ active: active === tab }" @click="active = tab">{{ tab }}</button></div>
-      <div class="detail-body">
-        <template v-if="active === '概览'">
-          <p class="archive-label" v-if="archive.includes(node.id)">★ MAP-Elites 精英档案程序</p>
-          <p>创建时间：{{ node.created_at || "未记录" }}</p>
-          <p>子程序：{{ children.length }}　克隆：{{ cloneNodes.length }}</p>
-          <button class="button" @click="$emit('open', node)">在新窗口打开完整程序页</button>
-        </template>
-        <pre v-else-if="active === '代码'" class="code-panel">{{ node.code }}</pre>
-        <pre v-else-if="active === '提示词'" class="code-panel">{{ promptText }}</pre>
-        <ul v-else-if="active === '子程序'"><li v-for="child in children" :key="child.id" class="mono">{{ child.id }} · 第 {{ child.generation }} 代</li></ul>
-        <ul v-else-if="active === '克隆'"><li v-for="clone in cloneNodes" :key="clone.id" class="mono">{{ clone.id }}</li></ul>
-        <div v-else class="diff-panel"><div v-for="(line, index) in diffLines" :key="index" :class="line.type">{{ line.text }}</div></div>
-      </div>
-    </div>
-  `,
-};
-
-export default { components: { NodeDetail } };
-</script>
 
 <style scoped>
 .run-progress { padding: 16px 18px; margin-bottom: 18px; }
@@ -1405,13 +1322,7 @@ export default { components: { NodeDetail } };
 .code-drawer { position:fixed; top:0; right:0; z-index:320; display:flex; flex-direction:column; gap:10px; width:min(660px, 64vw); height:100vh; padding:18px 20px; background:var(--surface); border-left:1px solid var(--line); box-shadow:-18px 0 46px #10182826; }
 .drawer-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
 .drawer-head-actions { display:flex; flex:none; align-items:center; gap:8px; }
-.drawer-code-wrap { position:relative; display:flex; flex:1; min-height:0; }
-/* 悬浮在代码区右上角，代码滚动时位置不变 */
-.code-copy-float { position:absolute; top:10px; right:16px; z-index:3; padding:4px 12px; border:1px solid #33415c; border-radius:8px; background:#1f2a3de6; color:#c6d2e6; font-size:11px; line-height:1.6; white-space:nowrap; backdrop-filter:blur(6px); }
-.code-copy-float:hover:not(:disabled) { border-color:#4b5c7d; background:#2a3750; color:#fff; }
-.code-copy-float.done { border-color:#178454; color:#57d99b; }
-.code-copy-float.fail { border-color:#c14242; color:#ff9494; }
-.drawer-code .code-body { padding-right:104px; }
+/* 代码预览的内容样式见 components/CodePreview.vue，复制按钮见 style.css */
 .drawer-head h3 { margin:4px 0 0; font-size:14px; display:flex; align-items:center; gap:8px; }
 .drawer-meta { margin:5px 0 0; color:var(--muted); font-size:10px; }
 .drawer-hint { margin:0; color:var(--muted); font-size:11px; }

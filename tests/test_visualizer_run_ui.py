@@ -3,7 +3,6 @@
 import importlib.util
 import json
 import os
-import runpy
 import sys
 import tempfile
 import unittest
@@ -15,44 +14,56 @@ try:
 except ImportError:  # pragma: no cover - visualizer extras not installed
     flask = None
 
-VISUALIZER = Path(__file__).resolve().parent.parent / "scripts" / "visualizer.py"
+ROOT = Path(__file__).resolve().parent.parent
 
 
 @unittest.skipIf(flask is None, "flask is not installed")
 class TestVisualizerRunUI(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        with patch.object(sys, "path", [str(VISUALIZER.parent), *sys.path]):
-            cls.visualizer = runpy.run_path(str(VISUALIZER))
-        cls.global_config_source = cls.visualizer["GLOBAL_CONFIG_PATH"]
-        cls.template_root = cls.visualizer["TEMPLATE_DIR"]
-        cls.default_template = cls.visualizer["DEFAULT_TEMPLATE_ID"]
+        from backend import paths, state
+        from backend.app import create_app
+
+        cls.paths = paths
+        cls.state = state
+        cls.app = create_app()
+        cls.global_config_source = paths.GLOBAL_CONFIG_PATH
+        cls.template_root = paths.TEMPLATE_DIR
+        cls.default_template = paths.DEFAULT_TEMPLATE_ID
 
     def setUp(self):
-        self.visualizer = self.__class__.visualizer
-        self.module_globals = self.visualizer["run_api"].__globals__
-        self.module_globals["current_run"] = None
+        self.addCleanup(self._restore_shared_state)
+        self.paths_ = self.__class__.paths
+        self.state_ = self.__class__.state
+        self.state_.current_run = None
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.gui_runs = Path(self.temporary.name) / "runs"
         self.global_config = Path(self.temporary.name) / "global-config.yml"
         source_config = self.__class__.global_config_source.read_text(encoding="utf-8")
         self.global_config.write_text(source_config, encoding="utf-8")
-        self.module_globals["GUI_RUNS_DIR"] = self.gui_runs
-        self.module_globals["GLOBAL_CONFIG_PATH"] = self.global_config
-        self.module_globals["TEMPLATE_DIR"] = self.__class__.template_root
+        self.paths_.GUI_RUNS_DIR = self.gui_runs
+        self.paths_.GLOBAL_CONFIG_PATH = self.global_config
+        self.paths_.TEMPLATE_DIR = self.__class__.template_root
         self.original_global_config = source_config
         self.template_dir = self.__class__.template_root / self.__class__.default_template
         self.source_files = {
             name: (self.template_dir / name).read_text(encoding="utf-8")
             for name in ("init.py", "runner_adapter.py", "prompt.md")
         }
-        self.client = self.visualizer["app"].test_client()
+        self.client = self.__class__.app.test_client()
+
+    def _restore_shared_state(self):
+        self.paths_.GUI_RUNS_DIR = ROOT / "evolve_tasks"
+        self.paths_.GLOBAL_CONFIG_PATH = ROOT / "evolve_tasks" / "global_config.yml"
+        self.paths_.TEMPLATE_DIR = ROOT / "solver" / "templates"
+        self.state_.current_run = None
+        self.state_.active_runs = {}
 
     @staticmethod
     def payload(**overrides):
         value = {
-            "template": "famou-调参",
+            "template": "famou-调参-v1",
             "task_name": "测试任务",
             "initial_program": "def run_search():\n    return 1\n",
             "prompt": "Tune only the parameter values.",
@@ -73,7 +84,8 @@ class TestVisualizerRunUI(unittest.TestCase):
         self.assertIn("评测脚本代码".encode(), response.data)
         self.assertIn("评分配置".encode(), response.data)
         self.assertIn("进化轮数".encode(), response.data)
-        self.assertNotIn("导入".encode(), response.data)
+        self.assertNotIn("导入实验文件".encode(), response.data)
+        self.assertNotIn("导入并填充表单".encode(), response.data)
         self.assertNotIn("配置文件（YAML）".encode(), response.data)
         self.assertNotIn("config.yml".encode(), response.data)
 
@@ -159,15 +171,15 @@ class TestVisualizerRunUI(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         run = response.get_json()["run"]
         self.assertEqual(run["status"], "running")
-        run_dir = Path(self.module_globals["current_run"]["run_dir"])
-        output_dir = Path(self.module_globals["current_run"]["output_dir"])
+        run_dir = Path(self.state_.current_run["run_dir"])
+        output_dir = Path(self.state_.current_run["output_dir"])
         self.assertEqual(
             run["run_dir"],
-            Path(os.path.relpath(run_dir, self.module_globals["PROJECT_ROOT"])).as_posix(),
+            Path(os.path.relpath(run_dir, self.paths_.PROJECT_ROOT)).as_posix(),
         )
         self.assertEqual(
             run["output_dir"],
-            Path(os.path.relpath(output_dir, self.module_globals["PROJECT_ROOT"])).as_posix(),
+            Path(os.path.relpath(output_dir, self.paths_.PROJECT_ROOT)).as_posix(),
         )
         self.assertEqual(
             (run_dir / "input" / "init.py").read_text(encoding="utf-8"),
@@ -195,7 +207,7 @@ class TestVisualizerRunUI(unittest.TestCase):
         self.assertEqual(
             evaluator_args["runner_command"],
             [
-                sys.executable,
+                self.paths_.RUNNER_PYTHON,
                 str(run_dir / "input" / "runner_adapter.py"),
                 "{program_path}",
             ],
@@ -228,12 +240,12 @@ class TestVisualizerRunUI(unittest.TestCase):
 
         log_path = output_dir / "experiment.log"
         log_path.write_text(
-            f"Logging to {self.module_globals['PROJECT_ROOT']}/evolve_tasks/sample/output/log.txt\n",
+            f"Logging to {self.paths_.PROJECT_ROOT}/evolve_tasks/sample/output/log.txt\n",
             encoding="utf-8",
         )
         status = self.client.get("/api/run").get_json()["run"]
         self.assertIn("Logging to evolve_tasks/sample/output/log.txt", status["log"])
-        self.assertNotIn(str(self.module_globals["PROJECT_ROOT"]), status["log"])
+        self.assertNotIn(str(self.paths_.PROJECT_ROOT), status["log"])
 
     def test_run_records_template_objective_and_task_name(self):
         process = MagicMock()
@@ -249,7 +261,7 @@ class TestVisualizerRunUI(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 202)
-        run_dir = Path(self.module_globals["current_run"]["run_dir"])
+        run_dir = Path(self.state_.current_run["run_dir"])
         generated_config = yaml.safe_load(
             (run_dir / "input" / "config.yaml").read_text(encoding="utf-8")
         )
@@ -260,7 +272,7 @@ class TestVisualizerRunUI(unittest.TestCase):
 
         manifest = json.loads((run_dir / "input" / "task.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "我的任务")
-        self.assertEqual(manifest["template"], "famou-调参")
+        self.assertEqual(manifest["template"], "famou-调参-v1")
 
     def test_ollama_config_does_not_require_codex_cli(self):
         import yaml

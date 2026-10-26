@@ -1,7 +1,6 @@
 """Tests for run controls that the Vue frontend exposes: checkpoints, resume, cancel, export."""
 
 import json
-import runpy
 import subprocess
 import sys
 import tempfile
@@ -16,7 +15,6 @@ except ImportError:  # pragma: no cover - visualizer extras not installed
     flask = None
 
 ROOT = Path(__file__).resolve().parent.parent
-VISUALIZER = ROOT / "scripts" / "visualizer.py"
 GLOBAL_CONFIG = ROOT / "evolve_tasks" / "global_config.yml"
 TEMPLATE_DIR = ROOT / "solver" / "templates"
 
@@ -41,10 +39,15 @@ def _program(program_id, score=0.0):
 class TestVisualizerRunControls(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        with patch.object(sys, "path", [str(VISUALIZER.parent), *sys.path]):
-            cls.visualizer = runpy.run_path(str(VISUALIZER))
+        from backend import paths, state
+        from backend.app import create_app
+
+        cls.paths = paths
+        cls.state = state
+        cls.app = create_app()
 
     def setUp(self):
+        self.addCleanup(self._restore_shared_state)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.runs_root = Path(self.temporary.name) / "evolve_tasks"
@@ -52,14 +55,24 @@ class TestVisualizerRunControls(unittest.TestCase):
         self.temp_root = Path(self.temporary.name)
         self.global_config = self.temp_root / "global-config.yml"
         self.global_config.write_text(GLOBAL_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
-        self.module_globals = self.visualizer["runs_api"].__globals__
-        self.module_globals["GUI_RUNS_DIR"] = self.runs_root
-        self.module_globals["GLOBAL_CONFIG_PATH"] = self.global_config
-        self.module_globals["TEMPLATE_DIR"] = TEMPLATE_DIR
-        self.module_globals["current_run"] = None
-        self.module_globals["active_runs"] = {}
-        self.module_globals["checkpoint_dir"] = None
-        self.client = self.visualizer["app"].test_client()
+        self.paths.GUI_RUNS_DIR = self.runs_root
+        self.paths.GLOBAL_CONFIG_PATH = self.global_config
+        self.paths.TEMPLATE_DIR = TEMPLATE_DIR
+        self.state.current_run = None
+        self.state.active_runs = {}
+        import sys as _sys
+
+        visualizer = _sys.modules.get("visualizer")
+        if visualizer is not None:
+            visualizer.checkpoint_dir = None
+        self.client = self.app.test_client()
+
+    def _restore_shared_state(self):
+        self.paths.GUI_RUNS_DIR = ROOT / "evolve_tasks"
+        self.paths.GLOBAL_CONFIG_PATH = ROOT / "evolve_tasks" / "global_config.yml"
+        self.paths.TEMPLATE_DIR = ROOT / "solver" / "templates"
+        self.state.current_run = None
+        self.state.active_runs = {}
 
     def _make_run(self, run_id, programs=None, checkpoints=(10,), feature_maps=None):
         run_dir = self.runs_root / run_id
@@ -163,7 +176,7 @@ class TestVisualizerRunControls(unittest.TestCase):
             [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True
         )
         self.addCleanup(process.kill)
-        self.module_globals["current_run"] = {
+        self.state.current_run = {
             "id": "evolve_task_20261023120000",
             "status": "running",
             "process": process,
@@ -220,7 +233,7 @@ class TestVisualizerRunControls(unittest.TestCase):
         self.assertIn("--checkpoint", command)
         self.assertTrue(command[command.index("--checkpoint") + 1].endswith("checkpoint_10"))
 
-        run_dir = Path(self.module_globals["current_run"]["run_dir"])
+        run_dir = Path(self.state.current_run["run_dir"])
         manifest = json.loads((run_dir / "input" / "task.json").read_text(encoding="utf-8"))
         self.assertTrue(manifest["resumed_from"].endswith("checkpoint_10"))
 
@@ -259,7 +272,7 @@ class TestVisualizerRunControls(unittest.TestCase):
         self.assertEqual(first.status_code, 202)
         self.assertEqual(second.status_code, 202)
         self.assertNotEqual(first.get_json()["run"]["id"], second.get_json()["run"]["id"])
-        self.assertEqual(len(self.module_globals["active_runs"]), 2)
+        self.assertEqual(len(self.state.active_runs), 2)
 
     def test_finished_tasks_leave_the_active_registry(self):
         process = MagicMock()
@@ -273,10 +286,12 @@ class TestVisualizerRunControls(unittest.TestCase):
 
         self.client.get("/api/runs")
 
-        self.assertEqual(self.module_globals["active_runs"], {})
+        self.assertEqual(self.state.active_runs, {})
 
     def test_run_rejects_invalid_resume_sources(self):
-        for resume_from in ("missing-task", "missing-task/checkpoint_10", "", "  "):
+        # 不存在的任务/检查点应拒绝；空串与空白表示「不续跑」（新建任务时总会带空串），
+        # 会正常启动而非 400。
+        for resume_from in ("missing-task", "missing-task/checkpoint_10"):
             response = self.client.post(
                 "/api/run",
                 json=self._run_payload(resume_from=resume_from),

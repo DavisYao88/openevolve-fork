@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { api } from "../api";
+import CodePreview from "../components/CodePreview.vue";
 
 const route = useRoute();
 const runId = computed(() => route.params.id || "");
@@ -274,7 +275,13 @@ onUnmounted(() => {
         </header>
         <p v-if="preview.loading" class="modal-hint">正在读取…</p>
         <p v-else-if="preview.error" class="modal-hint error">{{ preview.error }}</p>
-        <pre v-else class="modal-code">{{ preview.content }}</pre>
+        <CodePreview
+          v-else
+          :content="preview.content"
+          :filename="preview.name"
+          copy-label="复制内容"
+          max-height="none"
+        />
       </div>
     </div>
   </section>
@@ -331,7 +338,7 @@ onUnmounted(() => {
 .modal-close { min-height:30px; padding:4px 10px; font-size:11px; }
 .modal-hint { padding:20px 16px; color:#78849a; font-size:12px; }
 .modal-hint.error { color:#c14242; }
-.modal-code { flex:1; margin:0; overflow:auto; padding:14px 16px; background:#172033; color:#d7e0f1; font:11px/1.6 "IBM Plex Mono",monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+/* 弹窗里的代码显示交给 components/CodePreview.vue（与抽屉、代码浏览页一致） */
 .log-card { margin-top:16px; }
 .log-size { margin-left:8px; color:var(--muted); font-weight:400; font-size:11px; }
 .log-scroll { margin-left:12px; color:var(--muted); font-weight:400; font-size:11px; }

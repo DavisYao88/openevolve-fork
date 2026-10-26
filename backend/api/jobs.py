@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from flask import Blueprint, abort, jsonify
 
-from ..core import job_row, job_rows, viz
+from ..core import job_row, job_rows
+from .common import _is_local_request
 
 jobs_api = Blueprint("jobs", __name__)
 
@@ -16,14 +17,14 @@ jobs_api = Blueprint("jobs", __name__)
 @jobs_api.get("/api/jobs")
 def list_jobs():
     """所有演化任务，按目录时间倒序；正在跑的任务带上 PID 与实时状态。"""
-    if not viz._is_local_request():
+    if not _is_local_request():
         abort(403)
     return jsonify({"jobs": job_rows()})
 
 
 @jobs_api.get("/api/jobs/<job_id>")
 def get_job(job_id: str):
-    if not viz._is_local_request():
+    if not _is_local_request():
         abort(403)
     row = job_row(job_id)
     if row is None:

@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { FileTextOutlined, FolderOpenOutlined, FolderOutlined } from "@ant-design/icons-vue";
 import { api } from "../api";
-import { escapeHtml, highlightJsonLine, highlightLine } from "../highlight";
+import CodePreview from "../components/CodePreview.vue";
 
 const route = useRoute();
 const runId = computed(() => route.query.run_id || "");
@@ -43,7 +43,6 @@ function countFiles(nodes) {
 const fileCount = computed(() => countFiles(tree.value));
 
 const isJson = computed(() => /\.json$/i.test(selectedPath.value));
-const isPython = computed(() => /\.py$/i.test(selectedPath.value));
 
 const displayContent = computed(() => {
   const raw = file.value?.content || "";
@@ -57,13 +56,7 @@ const displayContent = computed(() => {
   return raw;
 });
 
-const codeLines = computed(() => String(displayContent.value).split("\n"));
 
-function renderLine(line) {
-  if (isJson.value) return highlightJsonLine(line);
-  if (isPython.value) return highlightLine(line);
-  return escapeHtml(line);
-}
 
 const BEST_PROGRAM_PATH = "output/best/best_program.py";
 
@@ -101,13 +94,6 @@ function onExpand(keys) {
   expandedKeys.value = keys;
 }
 
-async function copyFile() {
-  try {
-    await navigator.clipboard.writeText(displayContent.value);
-  } catch {
-    /* 剪贴板不可用时忽略 */
-  }
-}
 
 function firstFileOf(sectionName) {
   const stack = [...(tree.value.find((section) => section.name === sectionName)?.children || [])];
@@ -216,20 +202,19 @@ watch(runId, loadTree);
               <span v-if="isJson" class="formatted">已格式化 JSON</span>
             </p>
           </div>
-          <div class="file-actions">
-            <button class="button" :disabled="!file" @click="copyFile">复制内容</button>
-          </div>
+          <div class="file-actions"></div>
         </header>
 
         <p v-if="fileLoading" class="empty-hint">正在读取…</p>
         <p v-else-if="fileError" class="message error">{{ fileError }}</p>
         <p v-else-if="!file" class="empty-hint">从左侧点击任意文件查看内容。</p>
-        <div v-else class="code-view">
-          <div class="line-numbers">
-            <span v-for="(_, index) in codeLines" :key="index">{{ index + 1 }}</span>
-          </div>
-          <pre class="code-body"><code><span v-for="(line, index) in codeLines" :key="index" class="code-line" v-html="renderLine(line)"></span></code></pre>
-        </div>
+        <CodePreview
+          v-else
+          :content="displayContent"
+          :filename="selectedPath"
+          copy-label="复制内容"
+          min-height="480px"
+        />
       </section>
     </div>
   </section>
@@ -256,15 +241,6 @@ watch(runId, loadTree);
 .best-badge { margin-left:6px; padding:1px 7px; border-radius:100px; background:#e8a63b; color:#fff; font-size:9px; font-weight:700; }
 .truncated { color:#946407; }
 .formatted { margin-left:6px; padding:1px 6px; border-radius:100px; background:#eef3ff; color:var(--accent); }
-.code-view { display:flex; min-height:480px; max-height:70vh; overflow:auto; border-radius:10px; background:#172033; }
-.line-numbers { flex:0 0 46px; padding:12px 8px; border-right:1px solid #26324a; color:#5a6b8a; font:11px/1.7 "IBM Plex Mono",monospace; text-align:right; user-select:none; }
-.line-numbers span { display:block; }
-.code-body { flex:1; margin:0; padding:12px 14px; color:#d7e0f1; font:11px/1.7 "IBM Plex Mono",monospace; white-space:pre; }
-.code-line { display:block; }
-.tok-key { color:#7fa9ff; }
-.tok-str { color:#8fd6a0; }
-.tok-num { color:#e8b46b; }
-.tok-lit { color:#c792ea; }
 .empty-hint { margin:0; padding:8px 0; color:var(--muted); font-size:11px; }
 @media (max-width: 900px) {
   .code-layout { grid-template-columns:1fr; }

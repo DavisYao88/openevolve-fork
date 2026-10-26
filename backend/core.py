@@ -1,7 +1,8 @@
-"""把 ``scripts/visualizer.py`` 的 Flask 应用与任务工具接进来（不修改该文件）。
+"""把 ``scripts/visualizer.py`` 的 Flask 应用与任务工具接进来。
 
-visualizer 里已经有完整的路由实现（/api/run、/api/runs/<id>/progress、文件预览等），
-后端服务直接复用它们，只额外提供任务视角的接口。
+visualizer 里保留上游的路由实现（/、/api/data、/program/<id>、/api/runs/<id>/export
+以及 manual blueprint），后端服务直接复用它们，团队新增的接口挂在 backend 下的
+blueprint 上。这里额外提供任务视角的查询工具。
 """
 
 from __future__ import annotations
@@ -17,6 +18,9 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import visualizer  # noqa: E402  （需要先把 scripts 目录放进 sys.path）
 
+from . import state  # noqa: E402
+from .runs import _list_runs, _reap_finished_runs  # noqa: E402
+
 viz = visualizer
 
 
@@ -28,15 +32,15 @@ def _live_updates() -> dict[str, dict[str, Any]]:
             "return_code": run.get("return_code"),
             "pid": getattr(run.get("process"), "pid", None),
         }
-        for run_id, run in viz.active_runs.items()
+        for run_id, run in state.active_runs.items()
     }
 
 
 def job_rows() -> list[dict[str, Any]]:
-    viz._reap_finished_runs()
+    _reap_finished_runs()
     live = _live_updates()
     rows: list[dict[str, Any]] = []
-    for summary in viz._list_runs():
+    for summary in _list_runs():
         row = dict(summary)
         row.update(live.get(row.get("id"), {}))
         rows.append(row)

@@ -187,3 +187,27 @@ a { color: inherit; text-decoration: none; }
   color: var(--accent) !important;
   font-weight: 600;
 }
+
+/* ---------------------------------------------------------------------------
+   代码预览区的悬浮复制按钮（代码抽屉、任务代码浏览共用）
+--------------------------------------------------------------------------- */
+.code-copy-float {
+  position: absolute;
+  top: 10px;
+  right: 16px;
+  z-index: 3;
+  padding: 4px 12px;
+  border: 1px solid #33415c;
+  border-radius: 8px;
+  background: #1f2a3de6;
+  color: #c6d2e6;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+.code-copy-float:hover:not(:disabled) { border-color: #4b5c7d; background: #2a3750; color: #fff; }
+.code-copy-float:disabled { opacity: 0.55; cursor: default; }
+.code-copy-float.done { border-color: #178454; color: #57d99b; }
+.code-copy-float.fail { border-color: #c14242; color: #ff9494; }

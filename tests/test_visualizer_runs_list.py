@@ -1,8 +1,6 @@
 """Tests for the evolution run list page and run-scoped data loading."""
 
 import json
-import runpy
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,26 +11,43 @@ try:
 except ImportError:  # pragma: no cover - visualizer extras not installed
     flask = None
 
-VISUALIZER = Path(__file__).resolve().parent.parent / "scripts" / "visualizer.py"
+ROOT = Path(__file__).resolve().parent.parent
 
 
 @unittest.skipIf(flask is None, "flask is not installed")
 class TestVisualizerRunsList(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        with patch.object(sys, "path", [str(VISUALIZER.parent), *sys.path]):
-            cls.visualizer = runpy.run_path(str(VISUALIZER))
+        from backend import paths, state
+        from backend.app import create_app
+
+        cls.paths = paths
+        cls.state = state
+        cls.app = create_app()
 
     def setUp(self):
+        # 共享的 paths/state 对象：改一处，backend.runs / visualizer 全跟着变。
+        # 用 addCleanup 复位，即使 setUp 中途失败也能恢复，避免污染后续测试类。
+        self.addCleanup(self._restore_shared_state)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.runs_root = Path(self.temporary.name) / "evolve_tasks"
         self.runs_root.mkdir()
-        self.module_globals = self.visualizer["runs_api"].__globals__
-        self.module_globals["GUI_RUNS_DIR"] = self.runs_root
-        self.module_globals["current_run"] = None
-        self.module_globals["checkpoint_dir"] = None
-        self.client = self.visualizer["app"].test_client()
+        self.paths.GUI_RUNS_DIR = self.runs_root
+        self.state.current_run = None
+        import sys
+
+        visualizer = sys.modules.get("visualizer")
+        if visualizer is not None:
+            visualizer.checkpoint_dir = None
+        self.client = self.app.test_client()
+
+    def _restore_shared_state(self):
+        self.paths.GUI_RUNS_DIR = ROOT / "evolve_tasks"
+        self.paths.GLOBAL_CONFIG_PATH = ROOT / "evolve_tasks" / "global_config.yml"
+        self.paths.TEMPLATE_DIR = ROOT / "solver" / "templates"
+        self.state.current_run = None
+        self.state.active_runs = {}
 
     def _make_run(
         self,
@@ -130,7 +145,7 @@ class TestVisualizerRunsList(unittest.TestCase):
             "evolve_task_20261023130000",
             iterations=10,
             programs=["seed"],
-            log="Error: boom\n",
+            log="Traceback (most recent call last):\nRuntimeError: boom\n",
         )
 
         response = self.client.get("/api/runs")

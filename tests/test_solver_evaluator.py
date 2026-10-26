@@ -12,7 +12,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 SOLVER_EVALUATOR = ROOT / "solver" / "evaluator.py"
 TEMPLATE_DIR = ROOT / "solver" / "templates"
-FAMOU_DIR = TEMPLATE_DIR / "famou-调参"
+FAMOU_DIR = TEMPLATE_DIR / "famou-调参-v1"
 PARAM_DIR = TEMPLATE_DIR / "param-tuning"
 GENERIC_DIR = TEMPLATE_DIR / "generic-python"
 
