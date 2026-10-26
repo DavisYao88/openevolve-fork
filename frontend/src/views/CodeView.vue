@@ -119,6 +119,16 @@ function firstFileOf(sectionName) {
   return "";
 }
 
+// 把目标文件的所有上级目录展开，便于从其它页面直接定位到某个文件
+function expandTo(path) {
+  const parts = String(path || "").split("/").filter(Boolean);
+  const keys = new Set(expandedKeys.value);
+  for (let index = 1; index < parts.length; index += 1) {
+    keys.add(parts.slice(0, index).join("/"));
+  }
+  expandedKeys.value = [...keys];
+}
+
 async function loadTree() {
   loading.value = true;
   error.value = "";
@@ -127,8 +137,12 @@ async function loadTree() {
     tree.value = response.tree || [];
     runDir.value = response.run_dir || "";
     expandedKeys.value = tree.value.map((section) => section.path);
-    const preferred = firstFileOf("input") || firstFileOf("output");
-    if (preferred) await openFile(preferred);
+    const requested = String(route.query.path || "");
+    const preferred = requested || firstFileOf("input") || firstFileOf("output");
+    if (preferred) {
+      expandTo(preferred);
+      await openFile(preferred);
+    }
   } catch (cause) {
     error.value = String(cause.message || cause);
   } finally {

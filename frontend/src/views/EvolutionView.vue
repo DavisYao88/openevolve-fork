@@ -616,11 +616,46 @@ function isBestProgramId(id) {
   return !!bestProgramId.value && id === bestProgramId.value;
 }
 
+// 耗时按 program_id 从每轮明细里取（轮次树的 item 自带 duration_seconds）
+const durationByProgram = computed(() => {
+  const map = new Map();
+  for (const item of iterations.value) {
+    if (item?.program_id && item.duration_seconds != null) {
+      map.set(item.program_id, Number(item.duration_seconds));
+    }
+  }
+  return map;
+});
+
+function drawerDurationLabel(drawer) {
+  const seconds = drawer?.duration ?? durationByProgram.value.get(drawer?.id);
+  return Number.isFinite(seconds) ? `${Number(seconds).toFixed(1)}s` : "—";
+}
+
+const drawerMetrics = computed(() => Object.entries(codeDrawer.value?.node?.metrics || {}));
+
+// 「在代码目录中打开」：最优程序指向 best 产物，其它指向所在检查点的程序目录
+const drawerCodePath = computed(() => {
+  const drawer = codeDrawer.value;
+  if (!drawer) return "";
+  if (isBestProgramId(drawer.id)) return "output/best/best_program.py";
+  if (drawer.checkpoint && drawer.checkpoint !== "最新") {
+    return `output/checkpoints/${drawer.checkpoint}/programs/${drawer.id}.json`;
+  }
+  return "output";
+});
+
 async function loadProgramCode(id, meta = {}) {
   codeDrawer.value = { id, ...meta, code: "", error: "", loading: true };
   const local = nodes.value.find((item) => item.id === id);
   if (local?.code) {
-    codeDrawer.value = { ...codeDrawer.value, code: local.code, checkpoint: selectedCheckpoint.value || "最新", loading: false };
+    codeDrawer.value = {
+      ...codeDrawer.value,
+      node: local,
+      code: local.code,
+      checkpoint: selectedCheckpoint.value || "最新",
+      loading: false,
+    };
     return;
   }
   try {
@@ -628,6 +663,7 @@ async function loadProgramCode(id, meta = {}) {
     if (response?.node) {
       codeDrawer.value = {
         ...codeDrawer.value,
+        node: response.node,
         code: response.node.code || "",
         checkpoint: response.checkpoint || "",
         loading: false,
@@ -643,7 +679,7 @@ async function loadProgramCode(id, meta = {}) {
       const detail = await api.evolution(runId.value, item.name);
       const hit = (detail.nodes || []).find((node) => node.id === id);
       if (hit) {
-        codeDrawer.value = { ...codeDrawer.value, code: hit.code || "", checkpoint: item.name, loading: false };
+        codeDrawer.value = { ...codeDrawer.value, node: hit, code: hit.code || "", checkpoint: item.name, loading: false };
         return;
       }
     } catch {
@@ -892,7 +928,7 @@ onUnmounted(() => {
                   v-for="row in iterationTree.rows"
                   :key="row.item.program_id"
                   class="tree-node"
-                  @click="openCode(row.item.program_id, { iteration: row.item.iteration, score: iterationScore(row.item) })"
+                  @click="openCode(row.item.program_id, { iteration: row.item.iteration, score: iterationScore(row.item), status: row.item.status, duration: row.item.duration_seconds })"
                   @dblclick="openProgramHere(row.item.program_id)"
                   @mouseenter="showTip($event, tipForIteration(row.item))"
                   @mousemove="moveTip"
@@ -1140,6 +1176,22 @@ onUnmounted(() => {
         <button class="button" @click="closeCode">✕</button>
       </header>
 
+      <dl class="drawer-facts">
+        <div><dt>岛屿</dt><dd>{{ codeDrawer.node?.island ?? "—" }}</dd></div>
+        <div><dt>代数</dt><dd>{{ codeDrawer.node?.generation ?? "—" }}</dd></div>
+        <div><dt>发现轮次</dt><dd>{{ codeDrawer.iteration ?? codeDrawer.node?.iteration_found ?? "—" }}</dd></div>
+        <div><dt>耗时</dt><dd>{{ drawerDurationLabel(codeDrawer) }}</dd></div>
+        <div><dt>状态</dt><dd :class="{ 'fact-bad': codeDrawer.status === 'failed' }">{{ codeDrawer.status === "failed" ? "失败" : (codeDrawer.status === "completed" ? "成功" : "—") }}</dd></div>
+        <div><dt>父程序</dt><dd class="mono">{{ codeDrawer.node?.parent_id ? String(codeDrawer.node.parent_id).slice(0, 8) : "—" }}</dd></div>
+      </dl>
+
+      <div v-if="drawerMetrics.length" class="drawer-metrics">
+        <span v-for="[name, value] in drawerMetrics" :key="name">
+          <small>{{ name }}</small>
+          <b>{{ typeof value === "number" ? value.toFixed(4) : value }}</b>
+        </span>
+      </div>
+
       <p v-if="codeDrawer.loading" class="drawer-hint">正在读取代码…</p>
       <p v-else-if="codeDrawer.error" class="message error">{{ codeDrawer.error }}</p>
       <div v-else class="code-view drawer-code">
@@ -1151,6 +1203,7 @@ onUnmounted(() => {
 
       <footer class="drawer-foot">
         <RouterLink class="button primary" :to="programLink(codeDrawer.id)">打开完整程序页</RouterLink>
+        <RouterLink class="button" :to="{ path: '/code', query: { run_id: runId, path: drawerCodePath } }">在代码目录中打开</RouterLink>
         <button class="button" @click="closeCode">关闭</button>
       </footer>
     </div>
@@ -1288,6 +1341,15 @@ export default { components: { NodeDetail } };
 .drawer-head h3 { margin:4px 0 0; font-size:14px; display:flex; align-items:center; gap:8px; }
 .drawer-meta { margin:5px 0 0; color:var(--muted); font-size:10px; }
 .drawer-hint { margin:0; color:var(--muted); font-size:11px; }
+.drawer-facts { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px 12px; margin:0; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--accent-soft); }
+.drawer-facts div { display:flex; flex-direction:column; gap:2px; }
+.drawer-facts dt { color:var(--muted); font-size:10px; }
+.drawer-facts dd { margin:0; font-size:12px; font-weight:600; }
+.drawer-facts dd.fact-bad { color:#c14242; }
+.drawer-metrics { display:flex; flex-wrap:wrap; gap:6px; }
+.drawer-metrics span { display:flex; flex-direction:column; gap:1px; padding:5px 8px; border:1px solid var(--line); border-radius:7px; background:var(--surface); }
+.drawer-metrics small { color:var(--muted); font-size:9px; }
+.drawer-metrics b { font-size:10px; }
 .drawer-code { flex:1; min-height:0; max-height:none; }
 .drawer-foot { display:flex; gap:8px; }
 .code-view { display:flex; overflow:auto; border-radius:10px; background:#172033; }

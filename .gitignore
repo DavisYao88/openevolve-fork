@@ -61,3 +61,8 @@ problems
 fronted/node_modules/
 frontend/node_modules/
 frontend/dist/
+# 本地任务数据、运行产物与密钥（切勿提交）
+evolve_tasks/
+*.env
+.env.local
+.playwright-cli/
