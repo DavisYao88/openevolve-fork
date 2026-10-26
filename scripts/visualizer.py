@@ -57,6 +57,9 @@ def _load_dotenv() -> None:
 
 
 _load_dotenv()
+# 评测子进程用的解释器：任务的生产依赖常常装在别的 venv（例如生产模型工程自带 .venv），
+# 用 OPENEVOLVE_RUNNER_PYTHON 指向它；默认与可视化器本身一致。
+RUNNER_PYTHON = (os.environ.get("OPENEVOLVE_RUNNER_PYTHON") or "").strip() or sys.executable
 # 公共演化求解器：通用评估器 + 任务模板库（模板只描述目标与约束，不含评估器）。
 SOLVER_DIR = PROJECT_ROOT / "solver"
 SOLVER_EVALUATOR_PATH = SOLVER_DIR / "evaluator.py"
@@ -1082,6 +1085,17 @@ def run_api():
     llm_section = config.get("llm") if isinstance(config.get("llm"), dict) else {}
     run_api_key = str(llm_section.get("api_key") or "")
 
+    if not os.path.isfile(RUNNER_PYTHON):
+        return (
+            jsonify(
+                {
+                    "error": f"评测解释器不存在：{RUNNER_PYTHON}。"
+                    "请检查 OPENEVOLVE_RUNNER_PYTHON 或 .env.local 里的配置。"
+                }
+            ),
+            400,
+        )
+
     if not run_lock.acquire(blocking=False):
         return jsonify({"error": "正在启动另一个任务，请稍后再试。"}), 409
     try:
@@ -1121,7 +1135,7 @@ def run_api():
             adapter_path.write_text(evaluator, encoding="utf-8")
             prompt_path.write_text(prompt_text, encoding="utf-8")
             evaluator_args["runner_command"] = [
-                sys.executable,
+                RUNNER_PYTHON,
                 str(adapter_path),
                 "{program_path}",
             ]

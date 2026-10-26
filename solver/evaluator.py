@@ -87,6 +87,39 @@ def _decode_output(value: Any) -> str:
     return value or ""
 
 
+def _parse_stdout_json(stdout: str) -> dict[str, Any]:
+    """从评测命令的 stdout 里取出结果 JSON。
+
+    约定是 stdout 只打印一个 JSON 对象，但真实的生产工程常把训练/查询日志直接
+    print 到 stdout（例如 ``[train] 查询宽表 …``）。这里先整体解析，失败后从后
+    往前找最后一个合法 JSON 行，避免日志噪声让整轮评测变成 0 分。
+    """
+    text = (stdout or "").strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        return parsed
+
+    last_error: Optional[json.JSONDecodeError] = None
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError as error:
+            last_error = error
+            continue
+        if isinstance(candidate, dict):
+            return candidate
+
+    if last_error is not None:
+        raise last_error
+    raise json.JSONDecodeError("stdout 里没有找到 JSON 对象", text[:200], 0)
+
+
 # ---------------------------------------------------------------------------
 # 目标函数：把任意指标折算成越大越好的 combined_score
 # ---------------------------------------------------------------------------
@@ -477,9 +510,9 @@ def evaluate(
         return _failure(f"评测命令退出码为 {completed.returncode}", details)
 
     try:
-        result = json.loads(completed.stdout)
+        result = _parse_stdout_json(completed.stdout)
     except json.JSONDecodeError as error:
-        return _failure(f"评测命令 stdout 必须是单个 JSON 对象：{error}", details)
+        return _failure(f"评测命令 stdout 里没有可解析的 JSON 对象：{error}", details)
     if not isinstance(result, dict):
         return _failure("评测命令 JSON 顶层必须是对象", details)
 

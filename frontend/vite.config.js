@@ -10,6 +10,7 @@ export default defineConfig({
   plugins: [vue()],
   server: {
     host: "127.0.0.1",
+    port:4800,
     proxy: {
       "/api": {
         target: backend,
