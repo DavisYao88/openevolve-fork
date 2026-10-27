@@ -64,6 +64,12 @@ export const api = {
   runCheckpoints(runId) {
     return request(`/api/runs/${encodeURIComponent(runId)}/checkpoints`);
   },
+  runReport(runId) {
+    return request(`/api/runs/${encodeURIComponent(runId)}/report`);
+  },
+  runReportUrl(runId, format = "html") {
+    return `/api/runs/${encodeURIComponent(runId)}/report?format=${encodeURIComponent(format)}`;
+  },
   cancelRun(runId) {
     return request(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
   },

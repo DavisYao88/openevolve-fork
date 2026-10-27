@@ -270,6 +270,7 @@ class OpenEvolve:
         Raises:
             EvolutionFailedError: If iterations ran but none produced a candidate program
         """
+        started_at = time.time()
         max_iterations = self.config.max_iterations if iterations is None else iterations
         # Determine starting iteration
         start_iteration = 0
@@ -429,9 +430,12 @@ class OpenEvolve:
                     f"{format_metrics_safe(best_program.metrics)}"
                 )
             self._save_best_program(best_program)
+            # 结束时自动产出运行报告（json / md / html）
+            self._save_run_report(best_program, started_at)
             return best_program
         else:
             logger.warning("No valid programs found during evolution")
+            self._save_run_report(None, started_at)
             return None
 
     def _log_iteration(
@@ -603,3 +607,24 @@ class OpenEvolve:
             )
 
         logger.info(f"Saved best program to {code_path} with program info to {info_path}")
+
+    def _save_run_report(
+        self, program: Optional[Program] = None, started_at: Optional[float] = None
+    ) -> None:
+        """在 ``output/report/`` 下生成运行报告（json / md / html）。
+
+        报告失败绝不能影响演化结果本身，所以这里吞掉所有异常只记警告。
+        """
+        try:
+            from openevolve.report import generate_run_report
+
+            paths = generate_run_report(
+                output_dir=self.output_dir,
+                database=self.database,
+                config=self.config,
+                best_program=program,
+                started_at=started_at,
+            )
+            logger.info(f"Saved run report to {paths['markdown']}")
+        except Exception:
+            logger.warning("Could not generate the run report", exc_info=True)

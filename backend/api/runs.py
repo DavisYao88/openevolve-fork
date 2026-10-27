@@ -295,6 +295,39 @@ def run_checkpoints_api(run_id):
     return jsonify({"run_id": run_id, "checkpoints": _list_checkpoints(run_dir)})
 
 
+@runs_api_bp.route("/api/runs/<run_id>/report")
+def run_report_api(run_id):
+    """演化报告：默认返回结构化 JSON，``?format=html`` 返回可嵌入的静态页面。"""
+    if not _is_local_request():
+        abort(403)
+    run_dir = _resolve_run_dir(run_id)
+    if run_dir is None:
+        return jsonify({"error": f"找不到任务：{run_id}"}), 404
+
+    report_dir = run_dir / "output" / "report"
+    fmt = (request.args.get("format") or "json").lower()
+
+    if fmt in ("html", "md", "markdown"):
+        name = "report.html" if fmt == "html" else "report.md"
+        path = report_dir / name
+        if not path.is_file():
+            return jsonify({"error": "该任务还没有生成报告。"}), 404
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError as error:
+            return jsonify({"error": f"读取报告失败：{error}"}), 500
+        mimetype = "text/html; charset=utf-8" if fmt == "html" else "text/markdown; charset=utf-8"
+        return content, 200, {"Content-Type": mimetype}
+
+    json_path = report_dir / "report.json"
+    if not json_path.is_file():
+        return jsonify({"error": "该任务还没有生成报告（报告功能上线前的历史任务不补生成）。"}), 404
+    try:
+        return jsonify(json.loads(json_path.read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError) as error:
+        return jsonify({"error": f"报告内容无法解析：{error}"}), 500
+
+
 @runs_api_bp.route("/api/runs/<run_id>/cancel", methods=["POST"])
 def run_cancel_api(run_id):
     """Terminate a running task started from this service."""

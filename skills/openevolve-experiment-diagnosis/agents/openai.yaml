@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenEvolve Experiment Diagnosis"
+  short_description: "Diagnose OpenEvolve run quality and search health"
+  default_prompt: "Diagnose the current OpenEvolve run using its latest results and code, then recommend the next action."

@@ -1,0 +1,43 @@
+---
+name: openevolve-artifact-generator
+description: 'Interactive end-to-end OpenEvolve workflow for defining, implementing, and solving optimization tasks. The workflow typically proceeds in three stages: (1) understand the data and define the task, producing `problem.md`; (2) implement and validate `evaluator.py`, `init.py`, and `prompt.md` from the task definition; (3) run deep solving through OpenEvolve. Trigger this skill whenever the user wants to define, clarify, create, or fix an OpenEvolve task; prepare OpenEvolve experiment artifacts; write or update `problem.md`, `evaluator.py`, `init.py`, or `prompt.md`; run OpenEvolve; do deep solving; or solve an optimization, ML, or search problem with evolutionary methods. Even if the user simply says "help me make an OpenEvolve task", "help me solve this", or "run OpenEvolve", trigger this skill whenever the surrounding context indicates an optimization or search task. Also trigger when the user describes a combinatorial optimization, scheduling, routing, or ML problem without mentioning OpenEvolve — treat it as a potential OpenEvolve task.'
+metadata:
+  author: openevolve-group
+  version: "11.0"
+---
+
+# OpenEvolve Workflow Router
+
+> 三阶段：解读数据并定义问题（`problem.md`）→ 产出并校验 `evaluator.py` / `init.py` / `prompt.md`
+> → 提交本机后端求解。这三份产物正是任务 `input/` 目录所需的输入；
+> 提交与轮询见 `skills/openevolve-experiment-manager/components/create-run.md`。
+
+Route user tasks to the correct workflow.
+
+## Responsibilities
+
+1. Identify task type from user description
+2. Select exactly one workflow file in `references/`
+3. Delegate execution to that workflow
+4. Do not embed step details — those belong in workflows and components
+
+## Routing Rules
+
+**Priority order:**
+
+1. **User choice**: If the user explicitly names a workflow, use it
+2. **Automatic routing**: Otherwise, match by task characteristics:
+
+## Workflow Selection
+
+| Workflow | When to Use |
+|----------|-------------|
+| `general` | Generic optimization, search, planning, scheduling, or ML tasks — all other cases |
+
+## Execution Flow
+
+1. **Route**: Determine workflow based on routing rules
+2. **Delegate**: Read the selected file in `references/` and follow its instructions
+3. **Exit**: After delegation, router's job is complete
+
+If uncertain, default to `general` workflow and note assumptions.

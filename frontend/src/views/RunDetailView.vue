@@ -18,6 +18,8 @@ const logSize = ref(0);
 const logEof = ref(true);
 const logPanel = ref(null);
 const autoScroll = ref(true);
+const report = ref(null);
+const reportMissing = ref(false);
 let logOffset = 0;
 let detailTimer;
 let logTimer;
@@ -153,10 +155,38 @@ function onKeydown(event) {
   if (event.key === "Escape") closePreview();
 }
 
+async function loadReport() {
+  if (!runId.value) return;
+  try {
+    report.value = await api.runReport(runId.value);
+    reportMissing.value = false;
+  } catch {
+    report.value = null;
+    reportMissing.value = true;
+  }
+}
+
+function openReport(format) {
+  window.open(api.runReportUrl(runId.value, format), "_blank", "noopener");
+}
+
+function fmtScore(value) {
+  return Number.isFinite(value) ? Number(value).toFixed(4) : "—";
+}
+
+// 任务跑完后自动补拉报告（后端在演化结束时生成）
+watch(
+  () => detail.value?.status,
+  (status) => {
+    if (status && status !== "running" && !report.value) loadReport();
+  }
+);
+
 onMounted(() => {
   loadDetail();
   loadCheckpoints();
   loadLog();
+  loadReport();
   detailTimer = window.setInterval(loadDetail, 5000);
   logTimer = window.setInterval(() => { if (isRunning.value || !logEof.value) loadLog(); }, 3000);
   window.addEventListener("keydown", onKeydown);
@@ -255,6 +285,28 @@ onUnmounted(() => {
           </ul>
         </section>
       </div>
+      <section class="card report-card">
+        <h2 class="card-title">运行报告
+          <span v-if="report" class="log-size">演化结束时自动生成</span>
+        </h2>
+        <template v-if="report">
+          <div class="report-stats">
+            <div><small>最佳分数</small><strong>{{ fmtScore(report.best_score) }}</strong></div>
+            <div><small>相对提升</small><strong>{{ report.improvement_percent != null ? `${report.improvement_percent.toFixed(2)}%` : "—" }}</strong></div>
+            <div><small>程序数</small><strong>{{ report.total_programs }}</strong></div>
+            <div><small>主指标</small><strong class="mono">{{ report.primary_metric || "—" }}</strong></div>
+          </div>
+          <div class="report-actions">
+            <button class="button" @click="openReport('html')">新窗口查看完整报告</button>
+            <button class="button" @click="openReport('md')">下载 Markdown</button>
+          </div>
+        </template>
+        <p v-else-if="reportMissing" class="empty-hint">
+          {{ isRunning ? "任务结束后会自动生成报告。" : "该任务没有报告（报告功能上线前的历史任务不补生成）。" }}
+        </p>
+        <p v-else class="empty-hint">正在读取报告…</p>
+      </section>
+
       <section class="card log-card">
         <h2 class="card-title">运行日志
           <span class="log-size">{{ (logSize / 1024).toFixed(1) }} KB</span>
@@ -340,6 +392,12 @@ onUnmounted(() => {
 .modal-hint.error { color:#c14242; }
 /* 弹窗里的代码显示交给 components/CodePreview.vue（与抽屉、代码浏览页一致） */
 .log-card { margin-top:16px; }
+.report-card { margin-top:16px; }
+.report-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:10px; margin-bottom:12px; }
+.report-stats > div { display:flex; flex-direction:column; gap:4px; }
+.report-stats small { color:var(--muted); font-size:10px; }
+.report-stats strong { font-size:12px; overflow-wrap:anywhere; }
+.report-actions { display:flex; gap:8px; flex-wrap:wrap; }
 .log-size { margin-left:8px; color:var(--muted); font-weight:400; font-size:11px; }
 .log-scroll { margin-left:12px; color:var(--muted); font-weight:400; font-size:11px; }
 .log-scroll input { accent-color:var(--accent); }
