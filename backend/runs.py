@@ -277,6 +277,8 @@ def _run_summary(run_dir):
         "best_metrics": best_metrics,
         "model": model,
         "updated_at": updated_at,
+        # 演化结束会自动写 output/report/report.json，列表页据此决定是否显示「报告」入口
+        "has_report": (output_dir / "report" / "report.json").is_file(),
     }
 
 

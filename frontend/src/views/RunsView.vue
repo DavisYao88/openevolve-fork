@@ -33,6 +33,14 @@ function statusLabel(status) {
   return ({ completed: "已完成", running: "运行中", failed: "失败", interrupted: "已中断", unknown: "未知" })[status] || status;
 }
 
+function reportUrl(runId) {
+  return `/api/runs/${encodeURIComponent(runId)}/report?format=html`;
+}
+
+function fmtScore(value) {
+  return Number.isFinite(value) ? Number(value).toFixed(4) : "—";
+}
+
 onMounted(() => { loadRuns(); timer = window.setInterval(loadRuns, 5000); });
 onUnmounted(() => window.clearInterval(timer));
 </script>
@@ -60,11 +68,12 @@ onUnmounted(() => window.clearInterval(timer));
         </div>
         <span class="status-badge" :class="run.status">{{ statusLabel(run.status) }}</span>
         <span class="run-cell">{{ run.model || "—" }}</span>
-        <span class="run-cell">{{ run.planned_iterations ?? run.iterations }} / {{ run.programs }}</span>
-        <span class="run-cell mono">{{ run.best_metrics?.combined_score ?? "—" }}</span>
+        <span class="run-cell">{{ run.finished_iterations ?? 0 }} / {{ run.programs }}</span>
+        <span class="run-cell mono">{{ fmtScore(run.best_metrics?.combined_score) }}</span>
         <span class="run-cell">{{ run.updated_at || "—" }}</span>
         <div class="row-actions">
           <RouterLink class="button open-run" :to="{ path: `/runs/${run.id}` }">详情</RouterLink>
+          <a v-if="run.has_report" class="button open-run" :href="reportUrl(run.id)" target="_blank" rel="noopener">报告</a>
           <RouterLink class="button open-run" :to="{ path: '/code', query: { run_id: run.id } }">代码</RouterLink>
           <RouterLink class="button primary open-run" :to="{ path: '/', query: { run_id: run.id } }">查看</RouterLink>
         </div>
@@ -77,7 +86,7 @@ onUnmounted(() => window.clearInterval(timer));
 
 <style scoped>
 .runs-table { overflow:hidden; }
-.table-head, .run-row { display:grid; grid-template-columns:minmax(180px,1.5fr) 90px minmax(100px,1fr) 100px 110px 150px 140px; align-items:center; gap:14px; padding:13px 16px; }
+.table-head, .run-row { display:grid; grid-template-columns:minmax(180px,1.5fr) 90px minmax(100px,1fr) 100px 110px 150px 196px; align-items:center; gap:14px; padding:13px 16px; }
 .table-head { background:#f8f9fc; color:#78849a; font-size:10px; font-weight:700; }
 .run-row { min-height:67px; border-top:1px solid #edf0f5; font-size:11px; }
 .run-name { display:flex; min-width:0; flex-direction:column; gap:5px; }

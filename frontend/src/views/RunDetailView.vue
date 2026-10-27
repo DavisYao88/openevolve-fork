@@ -207,8 +207,9 @@ onUnmounted(() => {
         <p class="mono">{{ runId }}</p>
       </div>
       <div class="detail-actions">
-        <button class="button" :disabled="acting || !isRunning" @click="cancelRun">■ 停止运行</button>
+        <button v-if="isRunning" class="button" :disabled="acting" @click="cancelRun">■ 停止运行</button>
         <button class="button" :disabled="acting" @click="exportRun">⤓ 静态导出</button>
+        <a v-if="report" class="button" :href="api.runReportUrl(runId, 'html')" target="_blank" rel="noopener">查看报告</a>
         <RouterLink class="button" :to="{ path: '/code', query: { run_id: runId } }">查看代码</RouterLink>
         <RouterLink class="button primary" :to="{ path: '/', query: { run_id: runId } }">查看可视化</RouterLink>
       </div>
@@ -293,8 +294,8 @@ onUnmounted(() => {
           <div class="report-stats">
             <div><small>最佳分数</small><strong>{{ fmtScore(report.best_score) }}</strong></div>
             <div><small>相对提升</small><strong>{{ report.improvement_percent != null ? `${report.improvement_percent.toFixed(2)}%` : "—" }}</strong></div>
-            <div><small>程序数</small><strong>{{ report.total_programs }}</strong></div>
             <div><small>主指标</small><strong class="mono">{{ report.primary_metric || "—" }}</strong></div>
+            <div><small>生成时间</small><strong>{{ (report.generated_at || "—").replace("T", " ") }}</strong></div>
           </div>
           <div class="report-actions">
             <button class="button" @click="openReport('html')">新窗口查看完整报告</button>
@@ -393,8 +394,8 @@ onUnmounted(() => {
 /* 弹窗里的代码显示交给 components/CodePreview.vue（与抽屉、代码浏览页一致） */
 .log-card { margin-top:16px; }
 .report-card { margin-top:16px; }
-.report-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:10px; margin-bottom:12px; }
-.report-stats > div { display:flex; flex-direction:column; gap:4px; }
+.report-stats { display:flex; flex-wrap:wrap; gap:12px 32px; margin-bottom:14px; }
+.report-stats > div { display:flex; flex-direction:column; gap:3px; min-width:0; }
 .report-stats small { color:var(--muted); font-size:10px; }
 .report-stats strong { font-size:12px; overflow-wrap:anywhere; }
 .report-actions { display:flex; gap:8px; flex-wrap:wrap; }
