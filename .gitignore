@@ -41,7 +41,6 @@ ENV/
 examples/*/output/
 openevolve_output*/
 evolve_tasks/*
-!evolve_tasks/global_config.yml
 *.log
 demo_output*/
 pr_sanity*/
@@ -66,3 +65,13 @@ evolve_tasks/
 *.env
 .env.local
 .playwright-cli/
+.codebuddy
+.claude
+.codegraph
+
+# solver：只提交 evaluator.py / README.md / 公共模板（generic-python、param-tuning）
+# 其余为本地任务的数据、评估器、种子与特定业务模板
+solver/datasets/
+solver/evaluators/
+solver/seeds/
+solver/templates/famou-*/
