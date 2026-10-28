@@ -33,10 +33,6 @@ function statusLabel(status) {
   return ({ completed: "已完成", running: "运行中", failed: "失败", interrupted: "已中断", unknown: "未知" })[status] || status;
 }
 
-function reportUrl(runId) {
-  return `/api/runs/${encodeURIComponent(runId)}/report?format=html`;
-}
-
 function fmtScore(value) {
   return Number.isFinite(value) ? Number(value).toFixed(4) : "—";
 }
@@ -73,7 +69,7 @@ onUnmounted(() => window.clearInterval(timer));
         <span class="run-cell">{{ run.updated_at || "—" }}</span>
         <div class="row-actions">
           <RouterLink class="button open-run" :to="{ path: `/runs/${run.id}` }">详情</RouterLink>
-          <a v-if="run.has_report" class="button open-run" :href="reportUrl(run.id)" target="_blank" rel="noopener">报告</a>
+          <RouterLink v-if="run.has_report" class="button open-run" :to="{ path: `/runs/${run.id}`, query: { report: 1 } }">报告</RouterLink>
           <RouterLink class="button open-run" :to="{ path: '/code', query: { run_id: run.id } }">代码</RouterLink>
           <RouterLink class="button primary open-run" :to="{ path: '/', query: { run_id: run.id } }">查看</RouterLink>
         </div>

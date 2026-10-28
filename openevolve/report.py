@@ -132,11 +132,25 @@ def collect_summary(
     if started_at:
         elapsed = max(0.0, datetime.now().timestamp() - started_at)
 
-    # 任务名取上级目录名（evolve_tasks/<run_id>/output -> <run_id>），
-    # 直接用 output_dir 的 basename 会得到无意义的 "output"
+    # 任务名优先取 GUI 写入的 task.json（人类可读的名字），
+    # 其次退化为上级目录名（evolve_tasks/<run_id>/output -> <run_id>）
     normalized = os.path.normpath(output_dir)
     parent_name = os.path.basename(os.path.dirname(normalized))
     run_name = parent_name or os.path.basename(normalized) or "run"
+    for manifest_path in (
+        os.path.join(os.path.dirname(normalized), "task.json"),
+        os.path.join(os.path.dirname(normalized), "input", "task.json"),
+    ):
+        if not os.path.isfile(manifest_path):
+            continue
+        try:
+            with open(manifest_path, encoding="utf-8") as handle:
+                manifest = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(manifest, dict) and str(manifest.get("name") or "").strip():
+            run_name = str(manifest["name"]).strip()
+            break
 
     return {
         "run_name": run_name,

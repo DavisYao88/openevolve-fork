@@ -125,6 +125,8 @@ function openCheckpoint(name) {
 }
 
 const preview = ref(null);
+// 报告改为应用内弹窗查看，不再跳新标签页（否则用户回不到任务页）
+const showReport = ref(false);
 
 async function previewFile(name) {
   preview.value = { name, content: "", loading: true, truncated: false, size: 0, error: "" };
@@ -152,7 +154,12 @@ watch(logText, async () => {
 });
 
 function onKeydown(event) {
-  if (event.key === "Escape") closePreview();
+  if (event.key !== "Escape") return;
+  if (showReport.value) {
+    showReport.value = false;
+    return;
+  }
+  closePreview();
 }
 
 async function loadReport() {
@@ -186,7 +193,10 @@ onMounted(() => {
   loadDetail();
   loadCheckpoints();
   loadLog();
-  loadReport();
+  loadReport().then(() => {
+    // 从任务列表点「报告」进来时（?report=1）直接展开弹窗
+    if (route.query.report && report.value) showReport.value = true;
+  });
   detailTimer = window.setInterval(loadDetail, 5000);
   logTimer = window.setInterval(() => { if (isRunning.value || !logEof.value) loadLog(); }, 3000);
   window.addEventListener("keydown", onKeydown);
@@ -209,8 +219,8 @@ onUnmounted(() => {
       <div class="detail-actions">
         <button v-if="isRunning" class="button" :disabled="acting" @click="cancelRun">■ 停止运行</button>
         <button class="button" :disabled="acting" @click="exportRun">⤓ 静态导出</button>
-        <a v-if="report" class="button" :href="api.runReportUrl(runId, 'html')" target="_blank" rel="noopener">查看报告</a>
         <RouterLink class="button" :to="{ path: '/code', query: { run_id: runId } }">查看代码</RouterLink>
+        <button v-if="report" class="button" @click="showReport = true">查看报告</button>
         <RouterLink class="button primary" :to="{ path: '/', query: { run_id: runId } }">查看可视化</RouterLink>
       </div>
     </div>
@@ -298,7 +308,7 @@ onUnmounted(() => {
             <div><small>生成时间</small><strong>{{ (report.generated_at || "—").replace("T", " ") }}</strong></div>
           </div>
           <div class="report-actions">
-            <button class="button" @click="openReport('html')">新窗口查看完整报告</button>
+            <button class="button" @click="showReport = true">查看完整报告</button>
             <button class="button" @click="openReport('md')">下载 Markdown</button>
           </div>
         </template>
@@ -316,6 +326,19 @@ onUnmounted(() => {
         <pre ref="logPanel" class="log-view">{{ logText || "暂无日志" }}</pre>
       </section>
     </template>
+
+    <div v-if="showReport" class="modal-backdrop" @click.self="showReport = false">
+      <div class="modal-card report-modal" role="dialog" aria-modal="true" aria-label="运行报告">
+        <header class="modal-head">
+          <h3>运行报告 · {{ detail?.name || runId }}</h3>
+          <div class="modal-head-right">
+            <button class="button" @click="openReport('md')">下载 Markdown</button>
+            <button class="button modal-close" @click="showReport = false">✕ 关闭</button>
+          </div>
+        </header>
+        <iframe class="report-frame" :src="api.runReportUrl(runId, 'html')" title="运行报告"></iframe>
+      </div>
+    </div>
 
     <div v-if="preview" class="modal-backdrop" @click.self="closePreview">
       <div class="modal-card" role="dialog" aria-modal="true" :aria-label="`${preview.name} 内容预览`">
@@ -361,14 +384,17 @@ onUnmounted(() => {
 .progress-stats small, .info-list dt, .island-stats small { color:var(--muted); font-size:10px; }
 .progress-stats strong { font-size:12px; overflow-wrap:anywhere; }
 .progress-last { margin:12px 0 0; color:#57647a; font-size:11px; overflow-wrap:anywhere; }
-.detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; align-items:start; }
+.detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; align-items:stretch; }
+/* 三列等高；内容超出时在卡片内部滚动，而不是把整页顶长 */
+.detail-grid > .card { display:flex; flex-direction:column; max-height:340px; min-height:0; }
+.info-list, .checkpoint-list, .file-list { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; }
 .info-list { margin:0; }
 .info-list > div { display:grid; grid-template-columns:88px 1fr; gap:10px; align-items:baseline; padding:8px 0; border-bottom:1px solid #f0f2f6; }
 .info-list > div:last-child { border-bottom:0; }
 .info-list dt { color:#78849a; font-size:11px; font-weight:600; }
 .info-list dd { margin:0; font-size:12px; overflow-wrap:anywhere; }
 .card-hint { margin-left:8px; color:#9aa4b6; font-weight:400; font-size:10px; }
-.checkpoint-list { margin:0; padding:0; list-style:none; max-height:320px; overflow:auto; }
+.checkpoint-list { margin:0; padding:0; list-style:none; }
 .file-list { margin:0; padding:0; list-style:none; }
 .checkpoint-list li { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid #f0f2f6; }
 .checkpoint-list li:last-child { border-bottom:0; }
@@ -390,6 +416,8 @@ onUnmounted(() => {
 .modal-meta { color:#78849a; font-size:11px; }
 .modal-close { min-height:30px; padding:4px 10px; font-size:11px; }
 .modal-hint { padding:20px 16px; color:#78849a; font-size:12px; }
+.report-modal { width:min(1080px,100%); height:min(88vh,860px); }
+.report-frame { flex:1; width:100%; min-height:0; border:0; background:#070b14; }
 .modal-hint.error { color:#c14242; }
 /* 弹窗里的代码显示交给 components/CodePreview.vue（与抽屉、代码浏览页一致） */
 .log-card { margin-top:16px; }
